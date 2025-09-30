@@ -19,6 +19,7 @@ from pathlib import Path
 import time
 import shutil
 import tempfile
+from typing import Optional
 from typing import Dict, List, Tuple, Optional
 
 # Add path for imports
@@ -46,7 +47,7 @@ class CompleteSubjectAnalysis:
         self.pred_base = self.subject_path / "TractCloud"
         self.diffusion_dir = self.subject_path / "dMRI"
         self.tractography_path = self.subject_path / "output" / "streamlines_10M.vtk"
-        self.output_base_dir = self.base_path / "HCP_MRtrix" / self.subject_id / "complete_analysis"
+        self.output_base_dir = self.base_path / "HCP_MRtrix" / self.subject_id / "analysis"
         
         # Atlas configuration
         self.atlases = ["aparc+aseg", "aparc.a2009s+aseg"]
@@ -304,7 +305,11 @@ class CompleteSubjectAnalysis:
             traceback.print_exc()
             return False
     
-    def run_comprehensive_analysis(self, atlas: str, pred_labels_file: str, true_labels_file: str):
+    def run_comprehensive_analysis(self, atlas: str, pred_labels_file: str, true_labels_file: str, 
+                                 apply_thresholding: bool = False, threshold_percentage: float = 5.0, 
+                                 min_streamlines: int = 5, apply_length_filtering: bool = False,
+                                 min_length: float = 20.0, max_length: Optional[float] = None,
+                                 lengths_file: Optional[str] = None):
         """
         Run comprehensive analysis for a single atlas using the unified connectome system
         
@@ -312,15 +317,46 @@ class CompleteSubjectAnalysis:
             atlas: Atlas name
             pred_labels_file: Path to predicted labels file
             true_labels_file: Path to true labels file
+            apply_thresholding: Whether to apply node thresholding
+            threshold_percentage: Percentage of nodes to filter out
+            min_streamlines: Minimum number of streamlines for a node to keep
+            apply_length_filtering: Whether to apply streamline length filtering
+            min_length: Minimum streamline length in mm
+            max_length: Maximum streamline length in mm (optional)
+            lengths_file: Path to streamline lengths file (auto-detected if None)
         """
         print(f"\n🔸 Analyzing {atlas}")
         self.logger.info(f"Analyzing {atlas}")
+        
+        # Auto-detect lengths file if not provided but length filtering is requested
+        if apply_length_filtering and lengths_file is None:
+            # Try common locations for streamline lengths file
+            potential_lengths_files = [
+                self.subject_path / "output" / "streamline_lengths_10M.txt",
+                self.subject_path / "output" / "streamline_lengths.txt",
+                self.diffusion_dir / "streamline_lengths.txt"
+            ]
+            
+            for potential_file in potential_lengths_files:
+                if potential_file.exists():
+                    lengths_file = str(potential_file)
+                    self.logger.info(f"Auto-detected lengths file: {lengths_file}")
+                    break
+            
+            if lengths_file is None:
+                self.logger.warning("Length filtering requested but no lengths file found. Disabling length filtering.")
+                apply_length_filtering = False
         
         # Set up output directory
         atlas_output_dir = self.output_base_dir / atlas
         atlas_output_dir.mkdir(parents=True, exist_ok=True)
         
         print(f"  Running comprehensive connectome analysis...")
+        if apply_length_filtering:
+            length_desc = f"≥{min_length}mm"
+            if max_length is not None:
+                length_desc = f"{min_length}-{max_length}mm"
+            print(f"  With length filtering: {length_desc}")
         
         try:
             analyzer = analyze_connectomes_from_labels(
@@ -332,7 +368,14 @@ class CompleteSubjectAnalysis:
                 logger=self.logger,
                 compute_network_advanced=False,  # Keep it fast
                 compute_network_centrality=False,
-                compute_network_community=False
+                compute_network_community=False,
+                apply_thresholding=apply_thresholding,
+                threshold_percentage=threshold_percentage,
+                min_streamlines=min_streamlines,
+                apply_length_filtering=apply_length_filtering,
+                streamline_lengths_file=lengths_file,
+                min_length=min_length,
+                max_length=max_length
             )
             
             # Extract key results from the analyzer
@@ -390,23 +433,42 @@ class CompleteSubjectAnalysis:
             traceback.print_exc()
             return None
     
-    def run_complete_analysis(self, run_tests: bool = True):
+    def run_complete_analysis(self, run_tests: bool = False, apply_thresholding: bool = False,
+                            threshold_percentage: float = 5.0, min_streamlines: int = 5,
+                            apply_length_filtering: bool = False, min_length: float = 20.0,
+                            max_length: Optional[float] = None, lengths_file: Optional[str] = None):
         """
         Run the complete analysis including tests and comprehensive connectome analysis
         
         Args:
             run_tests: Whether to run system tests first
+            apply_thresholding: Whether to apply node thresholding
+            threshold_percentage: Percentage of nodes to filter out
+            min_streamlines: Minimum number of streamlines for a node to keep
+            apply_length_filtering: Whether to apply streamline length filtering
+            min_length: Minimum streamline length in mm
+            max_length: Maximum streamline length in mm (optional)
+            lengths_file: Path to streamline lengths file (auto-detected if None)
         """
         print("="*80)
         print("COMPLETE SUBJECT ANALYSIS")  
         print("Subject:", self.subject_id)
         print("Output directory:", self.output_base_dir)
+        if apply_thresholding:
+            print(f"Thresholding enabled: {threshold_percentage}% nodes removed, min {min_streamlines} streamlines")
+        if apply_length_filtering:
+            length_desc = f"≥{min_length}mm"
+            if max_length is not None:
+                length_desc = f"{min_length}-{max_length}mm"
+            print(f"Length filtering enabled: {length_desc}")
         print("="*80)
         
         self.logger.info("="*80)
         self.logger.info("COMPLETE SUBJECT ANALYSIS")
         self.logger.info(f"Subject: {self.subject_id}")
         self.logger.info(f"Output directory: {self.output_base_dir}")
+        if apply_thresholding:
+            self.logger.info(f"Thresholding enabled: {threshold_percentage}% nodes removed, min {min_streamlines} streamlines")
         self.logger.info("="*80)
         
         start_time = time.time()
@@ -443,7 +505,9 @@ class CompleteSubjectAnalysis:
             print(f"  True labels: {true_files[atlas]}")
             
             # Run comprehensive analysis
-            result = self.run_comprehensive_analysis(atlas, pred_files[atlas], true_files[atlas])
+            result = self.run_comprehensive_analysis(atlas, pred_files[atlas], true_files[atlas],
+                                                   apply_thresholding, threshold_percentage, min_streamlines,
+                                                   apply_length_filtering, min_length, max_length, lengths_file)
             
             if result is not None:
                 all_results.append(result)
@@ -598,8 +662,24 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description='Complete Subject Analysis')
     parser.add_argument('--subject', '-s', default='100206', help='Subject ID')
-    parser.add_argument('--no-tests', action='store_true', help='Skip system tests')
+    parser.add_argument('--tests', action='store_true', help='Skip system tests')
     parser.add_argument('--tests-only', action='store_true', help='Run only system tests')
+    
+    # Thresholding arguments
+    parser.add_argument('--threshold', action='store_true', help='Apply connectome thresholding')
+    parser.add_argument('--threshold-percentage', type=float, default=5.0, 
+                       help='Percentage of nodes to filter out (default: 5.0)')
+    parser.add_argument('--min-streamlines', type=int, default=5,
+                       help='Minimum number of streamlines for a node to keep (default: 5)')
+    
+    # Length filtering arguments
+    parser.add_argument('--length-filter', action='store_true', help='Apply streamline length filtering')
+    parser.add_argument('--min-length', type=float, default=20.0,
+                       help='Minimum streamline length in mm (default: 20.0)')
+    parser.add_argument('--max-length', type=float, default=None,
+                       help='Maximum streamline length in mm (optional)')
+    parser.add_argument('--lengths-file', type=str, default=None,
+                       help='Path to streamline lengths file (auto-detected if not provided)')
     
     args = parser.parse_args()
     
@@ -616,8 +696,17 @@ def main():
             print("\n❌ System tests failed!")
     else:
         # Run complete analysis
-        run_tests = not args.no_tests
-        results = analysis.run_complete_analysis(run_tests=run_tests)
+        run_tests = args.tests
+        results = analysis.run_complete_analysis(
+            run_tests=run_tests,
+            apply_thresholding=args.threshold,
+            threshold_percentage=args.threshold_percentage,
+            min_streamlines=args.min_streamlines,
+            apply_length_filtering=args.length_filter,
+            min_length=args.min_length,
+            max_length=args.max_length,
+            lengths_file=args.lengths_file
+        )
         
         if results:
             print(f"\n🎉 Complete analysis finished successfully!")

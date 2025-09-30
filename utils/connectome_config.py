@@ -42,6 +42,12 @@ DIFFUSION_METRICS = {
         'description': 'Radial Diffusivity',
         'units': 'mm²/s',
         'range': [0, 0.003]
+    },
+    'sift2': {
+        'filename': 'sift2_weights.txt',
+        'description': 'SIFT2 Weights',
+        'units': 'weight factor',
+        'range': [0, 5]
     }
 }
 
@@ -71,6 +77,11 @@ CONNECTOME_TYPES = {
         'description': 'RD-weighted',
         'weight_file': 'mean_rd_per_streamline.txt',
         'units': 'mean RD (mm²/s)'
+    },
+    'sift2': {
+        'description': 'SIFT2-weighted',
+        'weight_file': 'sift2_weights.txt',
+        'units': 'SIFT2 weight factor'
     }
 }
 

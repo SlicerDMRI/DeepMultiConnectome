@@ -358,6 +358,28 @@ process_subject() {
     end_time_tractography=$(date +%s)  # End time
     elapsed_time_tractography=$((end_time_tractography - start_time_tractography))
 
+    #!################################################################# 
+    #!###################### SIFT2 STREAMLINE WEIGHTS #################
+    #!#################################################################
+    start_time_sift=$(date +%s)
+    sift_weights="${dmri_dir}/sift2_weights.txt"
+    if [ ! -f ${sift_weights} ]; then
+        echo -e "${GREEN}[INFO]${NC} `date`: Running SIFT2 to calculate streamline weights" | tee -a "${log_file}"
+        tcksift2 -act "${seg_5tt}" -out_mu "${output_dir}/sift_mu.txt" \
+                 ${threading} -info \
+                 "${tracts}" "${wm_fod_norm}" "${sift_weights}" 2>&1 | tee -a "${log_file}"
+    fi
+    end_time_sift=$(date +%s)
+    elapsed_time_sift=$((end_time_sift - start_time_sift))
+
+    # Calculate and save length of each streamline
+    streamline_lengths_file="${output_dir}/streamline_lengths_${streamlines}.txt"
+    if [ ! -f ${streamline_lengths_file} ]; then
+        echo -e "${GREEN}[INFO]${NC} `date`: Calculating and saving length of each streamline" | tee -a "${log_file}"
+        
+        tckstats -dump "${streamline_lengths_file}" "${tracts}" ${threading} -info 2>&1 | tee -a "${log_file}"
+    fi
+
     #################################################################
     ################## MAP STRUCTURAL CONNECTIVITY ##################
     #################################################################
@@ -426,6 +448,8 @@ process_subject() {
         connectome_matrix_md_mean="${output_dir}/connectome_matrix_MD_mean_${parc}.csv"
         connectome_matrix_ad_mean="${output_dir}/connectome_matrix_AD_mean_${parc}.csv"
         connectome_matrix_rd_mean="${output_dir}/connectome_matrix_RD_mean_${parc}.csv"
+        #!!!!!!!!!
+        connectome_matrix_sift_sum="${output_dir}/connectome_matrix_SIFT_sum_${parc}.csv"
         
         if [ ! -f ${connectome_matrix_fa_mean} ]; then
             echo -e "${GREEN}[INFO]${NC} `date`: Computing diffusion-weighted connectome matrices for ${parc}" | tee -a "${log_file}"
@@ -469,7 +493,12 @@ process_subject() {
             tck2connectome ${threading} -info -symmetric \
                             "${tracts}" "${parcellation_converted}" "${connectome_matrix_rd_mean}" \
                             -scale_file "${dmri_dir}/mean_rd_per_streamline.txt" -stat_edge mean 2>&1 | tee -a "${log_file}"
-
+            #!!!!!!!!!!!!!
+            echo -e "${GREEN}[INFO]${NC} `date`: Generating SIFT2-weighted connectome" | tee -a "${log_file}"
+            tck2connectome ${threading} -info -symmetric \
+                           "${tracts}" "${parcellation_converted}" "${connectome_matrix_sift_sum}" \
+                           -scale_file "${sift_weights}" -stat_edge sum 2>&1 | tee -a "${log_file}"
+            
             # Record the end time
             end_time=$(date +%s)
 
@@ -483,6 +512,9 @@ process_subject() {
             python plot_connectome.py "${connectome_matrix_ad_mean}" "${output_dir}/connectome_matrix_AD_mean_${streamlines}_${parc}.png" "AD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
             python plot_connectome.py "${connectome_matrix_rd_mean}" "${output_dir}/connectome_matrix_RD_mean_${streamlines}_${parc}.png" "RD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
             python plot_connectome.py "${connectome_matrix_rd_mean}" "${output_dir}/connectome_matrix_RD_mean_${streamlines}_${parc}.png" "RD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
+            #!!!!!!!!!!!
+            python plot_connectome.py "${connectome_matrix_sift_sum}" "${output_dir}/connectome_matrix_SIFT_sum_${streamlines}_${parc}.png" "SIFT2-weighted Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
+
         fi
 
 
@@ -499,6 +531,7 @@ process_subject() {
     echo -e "${GREEN}[INFO]${NC} `date`: Diffusion Tensor Imaging took: ${elapsed_time_dti} seconds." | tee -a "${log_file}"
     echo -e "${GREEN}[INFO]${NC} `date`: Generating tissue boundary took: ${elapsed_time_tb} seconds." | tee -a "${log_file}"
     echo -e "${GREEN}[INFO]${NC} `date`: Tractography took: ${elapsed_time_tractography} seconds." | tee -a "${log_file}"
+    echo -e "${GREEN}[INFO]${NC} `date`: SIFT2 weighting took: ${elapsed_time_sift} seconds." | tee -a "${log_file}"
     echo -e "${GREEN}[INFO]${NC} `date`: Finished processing ${subject_id}. Total time: ${elapsed_time} seconds." | tee -a "${log_file}"
 
     # Call the Python script to clean the log file
