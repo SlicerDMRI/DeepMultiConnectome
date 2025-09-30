@@ -12,11 +12,12 @@ sys.path.append('../')
 from utils.logger import create_logger
 from utils.funcs import cluster2tract_label, makepath,  obtain_TractClusterMapping,tractography_parcellation
 from utils.cli import load_args_in_testing_only
+from utils.unified_connectome import ConnectomeAnalyzer, analyze_connectomes_from_labels
 from train import load_model, train_val_test_forward
 from datasets.dataset import RealData_PatchData, center_tractography
 import utils.tract_feat as tract_feat
 from tractography.label_encoder import * 
-from utils.metrics_connectome import *
+# from utils.metrics_connectome import *  # Replaced by unified_connectome
 
 
 def test_realdata_DL_net(net):
@@ -158,19 +159,99 @@ for i, atlas in enumerate(args.atlas):
         for prediction in pred_labels:
             file.write(f'{prediction}\n')
 
-    # Read true labels file for the current atlas
+# Save predictions and create comprehensive connectome analysis
+for i, atlas in enumerate(args.atlas):
+    # Select the correct predictions based on the atlas index
+    pred_labels = pred_labels_0 if i == 0 else pred_labels_1
+    num_labels_atlas = num_labels[atlas]  # Use the number of labels specific to each atlas
+
+    # Decode the predicted labels
+    pred_labels_decoded = convert_labels_list(pred_labels, encoding_type='symmetric', 
+                                              mode='decode', num_labels=num_labels_atlas)
+
+    # Write decoded predictions to a file
+    pred_decoded_file = os.path.join(args.out_path, f'predictions_{atlas}.txt')
+    with open(pred_decoded_file, 'w') as file:
+        for prediction in pred_labels_decoded:
+            file.write(f'{prediction[0]} {prediction[1]}\n')
+
+    # Write original predictions (without decoding) to a file for reference
+    pred_symmetric_file = os.path.join(args.out_path, f'predictions_{atlas}_symmetric.txt')
+    with open(pred_symmetric_file, 'w') as file:
+        for prediction in pred_labels:
+            file.write(f'{prediction}\n')
+
+    # Prepare true labels file
+    true_labels_file = os.path.join(os.path.dirname(args.tractography_path), f"labels_10M_{atlas}.txt")
+    true_symmetric_file = os.path.join(os.path.dirname(args.tractography_path), f"labels_10M_{atlas}_symmetric.txt")
+    
+    # Encode true labels to symmetric format
     encode_labels_txt(
-        os.path.join(os.path.dirname(args.tractography_path), f"labels_10M_{atlas}.txt"),
-        os.path.join(os.path.dirname(args.tractography_path), f"labels_10M_{atlas}_symmetric.txt"),
+        true_labels_file,
+        true_symmetric_file,
         'symmetric', num_labels=num_labels_atlas
     )
 
-    # with open(os.path.join(os.path.dirname(args.tractography_path), f"labels_10M_{atlas}_symmetric.txt"), 'r') as file:
-    #     true_labels = [int(line) for line in file]
+    # Perform comprehensive connectome analysis using the unified approach
+    logger.info(f"Starting comprehensive connectome analysis for atlas: {atlas}")
+    
+    try:
+        # Use the high-level function for complete analysis
+        analyzer = analyze_connectomes_from_labels(
+            pred_labels_file=pred_symmetric_file,
+            true_labels_file=true_symmetric_file,
+            diffusion_metrics_dir=os.path.dirname(args.tractography_path),
+            atlas=atlas,
+            out_path=args.out_path,
+            logger=logger
+        )
+        
+        # The analyzer automatically:
+        # 1. Creates all connectome types (NoS, FA, MD, AD, RD)
+        # 2. Saves all connectomes to CSV files
+        # 3. Computes comprehensive comparison metrics
+        # 4. Generates comparison plots
+        # 5. Performs network analysis
+        # 6. Saves results summary
+        
+        logger.info(f"Completed comprehensive connectome analysis for {atlas}")
+        logger.info(f"Results saved to: {args.out_path}")
+        
+        # Print summary for this atlas
+        print(f"\n=== SUMMARY FOR {atlas.upper()} ===")
+        analyzer.print_summary()
+        
+    except Exception as e:
+        logger.error(f"Error during connectome analysis for {atlas}: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Fallback: try basic analysis if comprehensive analysis fails
+        logger.info(f"Attempting basic connectome analysis for {atlas}")
+        try:
+            basic_analyzer = ConnectomeAnalyzer(atlas=atlas, out_path=args.out_path, logger=logger)
+            
+            # Create basic NoS connectomes
+            basic_analyzer.create_connectome_from_labels(pred_labels, connectome_name='pred_nos')
+            basic_analyzer.create_connectome_from_labels(
+                convert_labels_list([int(line.strip()) for line in open(true_symmetric_file)], 
+                                  encoding_type='symmetric', mode='decode', num_labels=num_labels_atlas),
+                connectome_name='true_nos'
+            )
+            
+            # Basic comparison
+            basic_analyzer.compute_comparison_metrics('true_nos', 'pred_nos', f'nos_{atlas}')
+            basic_analyzer.create_comparison_plot('true_nos', 'pred_nos', f'nos_{atlas}')
+            basic_analyzer.save_results_summary(f'basic_{atlas}')
+            
+            logger.info(f"Basic connectome analysis completed for {atlas}")
+            
+        except Exception as e2:
+            logger.error(f"Basic connectome analysis also failed for {atlas}: {e2}")
 
-    # # Compute connectome metrics for each atlas
-    # CM = ConnectomeMetrics(true_labels=true_labels, pred_labels=pred_labels, atlas=atlas, out_path=args.out_path, graph=True)
-    # logger.info(CM.format_metrics())
+# Print overall completion message
+logger.info("All connectome analyses completed!")
+logger.info(f"Check the output directory for detailed results: {args.out_path}")
     
 # time
 end_time = time.time()

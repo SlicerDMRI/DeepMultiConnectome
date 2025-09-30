@@ -1,6 +1,76 @@
 #!/bin/bash
 
-# Execute with e.g.: bash tractography.sh all ../../HCP_diffusion_MV/data/ 128
+#==============================================================================
+# TRACTOGRAPHY PROCESSING SCRIPT
+#==============================================================================
+# 
+# This script performs complete diffusion MRI tractography processing pipeline
+# including:
+# - Diffusion image preprocessing and conversion
+# - Constrained Spherical Deconvolution (CSD)
+# - Diffusion Tensor Imaging (DTI) metrics calculation
+# - Tissue boundary creation using 5TT segmentation
+# - Probabilistic tractography generation
+# - Structural connectivity matrix computation
+# - Diffusion metric-weighted connectomes (FA, MD, AD, RD)
+#
+# USAGE:
+#   bash tractography.sh <SUBJECT_ID> <DATA_DIR> [NUM_JOBS]
+#
+# PARAMETERS:
+#   SUBJECT_ID  - Either a specific 6-digit subject ID (e.g., "100206") 
+#                 or "all" to process all subjects in the data directory
+#   DATA_DIR    - Absolute path to the directory containing subject folders
+#   NUM_JOBS    - (Optional) Number of parallel jobs when using GNU parallel
+#                 (ignored in sequential mode, kept for backward compatibility)
+#
+# EXAMPLES:
+#   # Process a single subject
+#   bash tractography.sh 100206 /media/volume/MV_HCP/HCP_MRtrix
+#
+#   # Process all subjects sequentially (one at a time)
+#   bash tractography.sh all /media/volume/MV_HCP/HCP_MRtrix
+#
+#   # Process all subjects in parallel (requires GNU parallel)
+#   bash tractography.sh all /media/volume/MV_HCP/HCP_MRtrix 4
+#
+# EXPECTED DATA STRUCTURE:
+#   DATA_DIR/
+#   ├── SUBJECT_ID/
+#   │   ├── dMRI/
+#   │   │   ├── data.nii.gz      # Diffusion-weighted images
+#   │   │   ├── bvals            # B-values file
+#   │   │   └── bvecs            # B-vectors file
+#   │   └── anat/
+#   │       ├── T1w_acpc_dc_restore.nii.gz
+#   │       ├── T1w_acpc_dc_restore_brain.nii.gz
+#   │       ├── aparc+aseg.nii.gz
+#   │       ├── aparc.a2009s+aseg.nii.gz
+#   │       └── standard2acpc_dc.nii.gz
+#
+# OUTPUT:
+#   Each subject will have an 'output' directory created containing:
+#   - Tractography log file
+#   - Streamlines in VTK format
+#   - Connectome matrices (CSV format)
+#   - Connectome visualization plots (PNG format)
+#   - Diffusion metric-weighted connectomes
+#
+# REQUIREMENTS:
+#   - MRtrix3 (with all tools: mrconvert, dwi2response, dwi2fod, etc.)
+#   - FSL (bet, flirt)
+#   - FreeSurfer (for parcellation files)
+#   - Python with matplotlib, numpy, pandas
+#   - GNU parallel (optional, for parallel processing)
+#
+# PROCESSING TIME:
+#   Approximate time per subject: 45-90 minutes depending on hardware
+#   Main time-consuming steps:
+#   - Multi-Shell Multi-Tissue CSD: ~30-45 minutes
+#   - Tractography generation: ~10-20 minutes
+#   - Connectome computation: ~5-15 minutes
+#
+#==============================================================================
 
 # some colors for fancy logging
 RED='\033[0;31m'
@@ -11,7 +81,7 @@ subject_id=$1  # e.g., 100206 or 'all' to process all subjects
 data_dir=$2    # folder that contains the subjects
 num_jobs=$3    # number of parallel jobs
 
-threading="-nthreads 64" # Set the max number of threads process can use (e.g. number of cores)
+threading="-nthreads 4" # Set the max number of threads process can use (e.g. number of cores)
 
 process_subject() {
     local subject_id=$1
@@ -28,7 +98,7 @@ process_subject() {
         mkdir -p "${output_dir}"
     else
         echo -e "${RED}[INFO]${NC} `date`: Skipping ${subject_id}, output directory already exists."
-        # return
+        # return #! uncomment to skip subjects with existing output
     fi
 
     log_file="${data_dir}/${subject_id}/output/tractography_log.txt"
@@ -139,8 +209,18 @@ process_subject() {
         # Fit diffusion tensor model
         dwi2tensor "${dwi_mif}" "${dt_mif}" -mask "${dwi_meanbzero_brain_mask}" ${threading} -info 2>&1 | tee -a "${log_file}"
         
-        # Extract tensor-derived metrics
-        tensor2metric "${dt_mif}" -fa "${fa_mif}" -md "${md_mif}" -ad "${ad_mif}" -rd "${rd_mif}" ${threading} -info 2>&1 | tee -a "${log_file}"
+        # Extract tensor-derived metrics (using separate commands for each metric)
+        echo -e "${GREEN}[INFO]${NC} `date`: Extracting FA (Fractional Anisotropy)" | tee -a "${log_file}"
+        tensor2metric "${dt_mif}" -fa "${fa_mif}" ${threading} -info 2>&1 | tee -a "${log_file}"
+        
+        echo -e "${GREEN}[INFO]${NC} `date`: Extracting MD (Mean Diffusivity)" | tee -a "${log_file}"  
+        tensor2metric "${dt_mif}" -adc "${md_mif}" ${threading} -info 2>&1 | tee -a "${log_file}"
+        
+        echo -e "${GREEN}[INFO]${NC} `date`: Extracting AD (Axial Diffusivity)" | tee -a "${log_file}"
+        tensor2metric "${dt_mif}" -ad "${ad_mif}" ${threading} -info 2>&1 | tee -a "${log_file}"
+        
+        echo -e "${GREEN}[INFO]${NC} `date`: Extracting RD (Radial Diffusivity)" | tee -a "${log_file}"
+        tensor2metric "${dt_mif}" -rd "${rd_mif}" ${threading} -info 2>&1 | tee -a "${log_file}"
         
         # Convert FA to NIfTI for compatibility
         mrconvert "${fa_mif}" "${dmri_dir}/fa.nii.gz" ${threading} -info 2>&1 | tee -a "${log_file}"
@@ -427,14 +507,20 @@ process_subject() {
 }
 
 
-export -f process_subject  # Export the function for parallel
-
 if [ "${subject_id}" == "all" ]; then
     # Get a list of all subjects in the data directory
     subjects=$(ls "${data_dir}" | grep -E '^[0-9]{6}$')
+    
+    echo -e "${GREEN}[INFO]${NC} `date`: Processing subjects sequentially: ${subjects}"
+    
+    # Process each subject one at a time
+    for subject in ${subjects}; do
+        echo -e "${GREEN}[INFO]${NC} `date`: Starting processing for subject: ${subject}"
+        process_subject "${subject}" "${data_dir}"
+        echo -e "${GREEN}[INFO]${NC} `date`: Completed processing for subject: ${subject}"
+        echo "----------------------------------------"
+    done
 else
-    subjects="${subject_id}"
+    # Process single subject
+    process_subject "${subject_id}" "${data_dir}"
 fi
-
-# Run the process_subject function in parallel for each subject
-echo "${subjects}" | parallel -j "${num_jobs}" process_subject {} "${data_dir}"
