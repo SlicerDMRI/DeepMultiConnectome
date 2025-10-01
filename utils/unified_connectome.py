@@ -100,19 +100,20 @@ class ConnectomeAnalyzer:
             with open(metric_file, 'r') as f:
                 lines = f.readlines()
             
-            # Find the data line (skip comments)
-            data_line = None
+            # Check if it's a single-line file (space-separated) or multi-line file (newline-separated)
+            all_values = []
             for line in lines:
                 line = line.strip()
                 if line and not line.startswith('#'):
-                    data_line = line
-                    break
+                    # Try to split by spaces first (original format)
+                    line_values = line.split()
+                    all_values.extend(line_values)
             
-            if not data_line:
+            if not all_values:
                 self._log(f"No data found in {metric_name} file", "warning")
                 return np.full(expected_length, np.nan)
             
-            values = data_line.split()
+            values = all_values
             
             # Create output array filled with NaN
             result = np.full(expected_length, np.nan)
@@ -1011,6 +1012,12 @@ def analyze_connectomes_from_labels(pred_labels_file: str,
     # Create weighted connectomes for each diffusion metric
     for metric_name, metric_config in DIFFUSION_METRICS.items():
         metric_file = Path(diffusion_metrics_dir) / metric_config['filename']
+        
+        # Also check for thresholded version if standard file doesn't exist
+        if not metric_file.exists():
+            # Check for thresholded filename (e.g., mean_fa_per_streamline_thresholded.txt)
+            base_name = metric_config['filename'].replace('.txt', '_thresholded.txt')
+            metric_file = Path(diffusion_metrics_dir) / base_name
         
         if metric_file.exists():
             try:
