@@ -84,19 +84,91 @@ class ConnectomeAnalyzer:
         else:
             print(f"[{level.upper()}] {message}")
     
+    def _load_metric_values_improved(self, metric_file: Path, expected_length: int, metric_name: str) -> np.ndarray:
+        """
+        Improved metric loading that maintains consistent array sizes by preserving NaN positions
+        
+        Args:
+            metric_file: Path to the metric file
+            expected_length: Expected number of values
+            metric_name: Name of the metric for logging
+            
+        Returns:
+            NumPy array of metric values with NaN for missing/invalid values
+        """
+        try:
+            with open(metric_file, 'r') as f:
+                lines = f.readlines()
+            
+            # Find the data line (skip comments)
+            data_line = None
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    data_line = line
+                    break
+            
+            if not data_line:
+                self._log(f"No data found in {metric_name} file", "warning")
+                return np.full(expected_length, np.nan)
+            
+            values = data_line.split()
+            
+            # Create output array filled with NaN
+            result = np.full(expected_length, np.nan)
+            
+            valid_count = 0
+            nan_count = 0
+            invalid_count = 0
+            
+            # Parse values maintaining positions
+            max_values = min(len(values), expected_length)
+            for i in range(max_values):
+                val = values[i]
+                if val.lower() == 'nan':
+                    result[i] = np.nan
+                    nan_count += 1
+                else:
+                    try:
+                        result[i] = float(val)
+                        valid_count += 1
+                    except ValueError:
+                        result[i] = np.nan
+                        invalid_count += 1
+            
+            # Log statistics
+            total_in_file = len(values)
+            if total_in_file != expected_length:
+                self._log(f"Metric {metric_name}: file has {total_in_file} values, expected {expected_length}", "info")
+            
+            if nan_count > 0 or invalid_count > 0:
+                self._log(f"Metric {metric_name}: {valid_count} valid, {nan_count} NaN, {invalid_count} invalid values", "info")
+            else:
+                self._log(f"Metric {metric_name}: {valid_count} valid values loaded", "info")
+            
+            return result
+            
+        except Exception as e:
+            self._log(f"Error loading {metric_name} values: {e}", "error")
+            return np.full(expected_length, np.nan)
+    
     def create_connectome_from_labels(self, 
                                     labels: Union[List, np.ndarray],
                                     weights: Optional[Union[List, np.ndarray]] = None,
                                     encoding: str = 'symmetric',
-                                    connectome_name: str = None) -> np.ndarray:
+                                    connectome_name: str = None,
+                                    aggregation_method: str = 'mean') -> np.ndarray:
         """
         Create connectome matrix from streamline labels
         
         Args:
             labels: List/array of streamline labels
-            weights: Optional weights for each streamline (e.g., FA values)
+            weights: Optional weights for each streamline (e.g., FA values, SIFT2 weights)
             encoding: Label encoding type ('symmetric', 'asymmetric')
             connectome_name: Name to store the connectome
+            aggregation_method: How to aggregate weights ('mean' or 'sum')
+                               - 'mean': Average weights for each connection (default for diffusion metrics)
+                               - 'sum': Sum weights for each connection (recommended for SIFT2 weights)
             
         Returns:
             Connectome matrix
@@ -135,7 +207,7 @@ class ConnectomeAnalyzer:
             if len(weights) != len(decoded_labels):
                 raise ValueError("Weights and labels must have the same length")
                 
-            # Track counts for averaging
+            # Track counts for averaging (only needed for mean aggregation)
             count_matrix = np.zeros((self.num_labels, self.num_labels))
             
             for idx, label_pair in enumerate(decoded_labels):
@@ -150,11 +222,23 @@ class ConnectomeAnalyzer:
                                 connectome_matrix[j, i] += weight
                                 count_matrix[j, i] += 1
             
-            # Average the weights
-            with np.errstate(divide='ignore', invalid='ignore'):
-                connectome_matrix = np.divide(connectome_matrix, count_matrix, 
-                                            out=np.zeros_like(connectome_matrix), 
-                                            where=count_matrix!=0)
+            # Apply aggregation method
+            if aggregation_method.lower() == 'mean':
+                # Average the weights
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    connectome_matrix = np.divide(connectome_matrix, count_matrix, 
+                                                out=np.zeros_like(connectome_matrix), 
+                                                where=count_matrix!=0)
+            elif aggregation_method.lower() == 'sum':
+                # Keep summed weights (no additional processing needed)
+                pass
+            else:
+                self._log(f"Warning: Unknown aggregation method '{aggregation_method}'. Using 'mean'.", "warning")
+                # Default to mean
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    connectome_matrix = np.divide(connectome_matrix, count_matrix, 
+                                                out=np.zeros_like(connectome_matrix), 
+                                                where=count_matrix!=0)
         
         # Remove the first row and column (background label)
         connectome_matrix = connectome_matrix[1:, 1:]
@@ -162,7 +246,8 @@ class ConnectomeAnalyzer:
         # Store connectome if name provided
         if connectome_name:
             self.connectomes[connectome_name] = connectome_matrix
-            self._log(f"Created connectome '{connectome_name}' with shape {connectome_matrix.shape}")
+            agg_desc = f" (weights {aggregation_method})" if weights is not None else ""
+            self._log(f"Created connectome '{connectome_name}' with shape {connectome_matrix.shape}{agg_desc}")
         
         return connectome_matrix
     
@@ -883,33 +968,34 @@ def analyze_connectomes_from_labels(pred_labels_file: str,
                 with open(metric_file, 'r') as f:
                     lines = f.readlines()
                 
-                # Filter out comments and empty lines, parse numbers
-                metric_values = []
-                for line in lines:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        try:
-                            # Handle multiple values per line (space-separated)
-                            values = line.split()
-                            for val in values:
-                                if val.lower() != 'nan':  # Skip NaN values
-                                    metric_values.append(float(val))
-                        except ValueError:
-                            continue  # Skip lines that can't be parsed
+                # Use improved metric loading to handle NaN values correctly
+                expected_length = len(pred_labels)
+                metric_values_array = analyzer._load_metric_values_improved(metric_file, expected_length, metric_name)
                 
-                if metric_values:
-                    # Ensure same length as labels
+                # Convert to list for compatibility with existing code
+                metric_values = metric_values_array.tolist()
+                
+                if len(metric_values) > 0:
+                    # Ensure same length as labels (should now be consistent)
                     min_len = min(len(pred_labels), len(metric_values))
+                    if min_len != len(pred_labels):
+                        analyzer._log(f"Metric {metric_name}: using {min_len} of {len(pred_labels)} expected values", "warning")
+                    
                     labels_subset = pred_labels[:min_len]
                     values_subset = metric_values[:min_len]
                     
+                    # SIFT2 weights should be summed, other metrics should be averaged
+                    aggregation_method = 'sum' if metric_name == 'sift2' else 'mean'
+                    
                     analyzer.create_connectome_from_labels(
                         labels_subset, weights=values_subset, 
-                        connectome_name=f'pred_{metric_name}'
+                        connectome_name=f'pred_{metric_name}',
+                        aggregation_method=aggregation_method
                     )
                     analyzer.create_connectome_from_labels(
                         true_labels[:min_len], weights=values_subset,
-                        connectome_name=f'true_{metric_name}'
+                        connectome_name=f'true_{metric_name}',
+                        aggregation_method=aggregation_method
                     )
                 
             except Exception as e:

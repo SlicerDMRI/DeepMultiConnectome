@@ -368,14 +368,7 @@ class CompleteSubjectAnalysis:
                 logger=self.logger,
                 compute_network_advanced=False,  # Keep it fast
                 compute_network_centrality=False,
-                compute_network_community=False,
-                apply_thresholding=apply_thresholding,
-                threshold_percentage=threshold_percentage,
-                min_streamlines=min_streamlines,
-                apply_length_filtering=apply_length_filtering,
-                streamline_lengths_file=lengths_file,
-                min_length=min_length,
-                max_length=max_length
+                compute_network_community=False
             )
             
             # Extract key results from the analyzer

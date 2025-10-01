@@ -15,21 +15,26 @@
 # - Diffusion metric-weighted connectomes (FA, MD, AD, RD)
 #
 # USAGE:
-#   bash tractography.sh <SUBJECT_ID> <DATA_DIR> [NUM_JOBS]
+#   bash tractography.sh <SUBJECT_ID_OR_FILE> <DATA_DIR> [NUM_JOBS]
 #
 # PARAMETERS:
-#   SUBJECT_ID  - Either a specific 6-digit subject ID (e.g., "100206") 
-#                 or "all" to process all subjects in the data directory
-#   DATA_DIR    - Absolute path to the directory containing subject folders
-#   NUM_JOBS    - (Optional) Number of parallel jobs when using GNU parallel
-#                 (ignored in sequential mode, kept for backward compatibility)
+#   SUBJECT_ID_OR_FILE - Either:
+#                        - A specific 6-digit subject ID (e.g., "100206")
+#                        - "all" to process all subjects in the data directory
+#                        - Path to a text file containing subject IDs (one per line)
+#   DATA_DIR           - Absolute path to the directory containing subject folders
+#   NUM_JOBS           - (Optional) Number of parallel jobs when using GNU parallel
+#                        (ignored in sequential mode, kept for backward compatibility)
 #
 # EXAMPLES:
 #   # Process a single subject
 #   bash tractography.sh 100206 /media/volume/MV_HCP/HCP_MRtrix
 #
-#   # Process all subjects sequentially (one at a time)
+#   # Process all subjects in the data directory
 #   bash tractography.sh all /media/volume/MV_HCP/HCP_MRtrix
+#
+#   # Process subjects from a custom list file
+#   bash tractography.sh /media/volume/MV_HCP/subjects_tractography_output_1000_test.txt /media/volume/MV_HCP/HCP_MRtrix
 #
 #   # Process all subjects in parallel (requires GNU parallel)
 #   bash tractography.sh all /media/volume/MV_HCP/HCP_MRtrix 4
@@ -77,7 +82,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-subject_id=$1  # e.g., 100206 or 'all' to process all subjects
+subject_id=$1  # e.g., 100206, 'all', or path to subject list file
 data_dir=$2    # folder that contains the subjects
 num_jobs=$3    # number of parallel jobs
 
@@ -543,15 +548,39 @@ process_subject() {
 if [ "${subject_id}" == "all" ]; then
     # Get a list of all subjects in the data directory
     subjects=$(ls "${data_dir}" | grep -E '^[0-9]{6}$')
+    subject_count=$(echo "${subjects}" | wc -l)
     
-    echo -e "${GREEN}[INFO]${NC} `date`: Processing subjects sequentially: ${subjects}"
+    echo -e "${GREEN}[INFO]${NC} `date`: Processing ${subject_count} subjects from data directory: ${data_dir}"
+    echo -e "${GREEN}[INFO]${NC} `date`: Subject list: $(echo ${subjects} | tr '\n' ' ')"
     
     # Process each subject one at a time
+    current=1
     for subject in ${subjects}; do
-        echo -e "${GREEN}[INFO]${NC} `date`: Starting processing for subject: ${subject}"
+        echo -e "${GREEN}[INFO]${NC} `date`: Starting processing for subject: ${subject} (${current}/${subject_count})"
         process_subject "${subject}" "${data_dir}"
-        echo -e "${GREEN}[INFO]${NC} `date`: Completed processing for subject: ${subject}"
+        echo -e "${GREEN}[INFO]${NC} `date`: Completed processing for subject: ${subject} (${current}/${subject_count})"
         echo "----------------------------------------"
+        ((current++))
+    done
+elif [ -f "${subject_id}" ]; then
+    # Read subjects from the specified text file
+    subjects_file="${subject_id}"
+    
+    # Read subjects from file, removing any potential whitespace
+    subjects=$(cat "${subjects_file}" | tr -d '\r' | grep -v '^$')
+    subject_count=$(echo "${subjects}" | wc -l)
+    
+    echo -e "${GREEN}[INFO]${NC} `date`: Processing ${subject_count} subjects from file: ${subjects_file}"
+    echo -e "${GREEN}[INFO]${NC} `date`: Subject list: $(echo ${subjects} | tr '\n' ' ')"
+    
+    # Process each subject one at a time
+    current=1
+    for subject in ${subjects}; do
+        echo -e "${GREEN}[INFO]${NC} `date`: Starting processing for subject: ${subject} (${current}/${subject_count})"
+        process_subject "${subject}" "${data_dir}"
+        echo -e "${GREEN}[INFO]${NC} `date`: Completed processing for subject: ${subject} (${current}/${subject_count})"
+        echo "----------------------------------------"
+        ((current++))
     done
 else
     # Process single subject
