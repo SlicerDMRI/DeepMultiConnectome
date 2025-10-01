@@ -370,34 +370,59 @@ class ConnectomeAnalyzer:
             relative_error = np.abs(true_flat - pred_flat) / (np.abs(true_flat) + np.abs(pred_flat) + 1e-10)
             metrics['mean_relative_error'] = np.mean(relative_error)
         
-        # LERM (Log-Euclidean Relative Magnitude) - using matrix logarithm approach
+        # LERM (Log-Euclidean Relative Magnitude) - using improved numerical stability
         try:
             from scipy.linalg import logm
-            # Add small epsilon to avoid log(0) issues
-            epsilon = 1e-10
-            true_conn_safe = true_conn + epsilon
-            pred_conn_safe = pred_conn + epsilon
+            import warnings
             
-            # Compute LERM as Frobenius norm of difference of matrix logarithms
-            metrics['mean_lerm'] = norm(logm(pred_conn_safe) - logm(true_conn_safe), 'fro')
-        except ImportError:
-            # Fallback to original LERM computation if scipy.linalg.logm not available
+            # Check if matrices are suitable for matrix logarithm
+            true_min = np.min(true_conn)
+            pred_min = np.min(pred_conn)
+            true_max = np.max(true_conn)
+            pred_max = np.max(pred_conn)
+            
+            # Use matrix logarithm only if matrices are well-conditioned
+            if (true_min >= 0 and pred_min >= 0 and 
+                true_max > 1e-6 and pred_max > 1e-6 and
+                np.linalg.cond(true_conn) < 1e12 and np.linalg.cond(pred_conn) < 1e12):
+                
+                # Add appropriate epsilon based on matrix scale
+                epsilon = max(1e-10, min(true_max, pred_max) * 1e-6)
+                true_conn_safe = true_conn + epsilon
+                pred_conn_safe = pred_conn + epsilon
+                
+                # Suppress specific warnings during logm computation
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', category=RuntimeWarning)
+                    warnings.filterwarnings('ignore', message='.*nearly singular.*')
+                    warnings.filterwarnings('ignore', message='.*divide by zero.*')
+                    warnings.filterwarnings('ignore', message='.*invalid value.*')
+                    
+                    try:
+                        logm_true = logm(true_conn_safe)
+                        logm_pred = logm(pred_conn_safe)
+                        
+                        # Check if logm results are valid (no NaN/inf)
+                        if (np.isfinite(logm_true).all() and np.isfinite(logm_pred).all()):
+                            metrics['mean_lerm'] = norm(logm_pred - logm_true, 'fro')
+                        else:
+                            raise ValueError("Matrix logarithm produced non-finite values")
+                            
+                    except (np.linalg.LinAlgError, ValueError):
+                        raise ValueError("Matrix logarithm computation failed")
+            else:
+                raise ValueError("Matrices not suitable for matrix logarithm")
+                
+        except (ImportError, ValueError, Exception):
+            # Use fallback LERM computation (standard relative difference)
             with np.errstate(divide='ignore', invalid='ignore'):
                 denominator = true_conn + pred_conn
                 lerm_matrix = np.zeros_like(true_conn)
                 valid_mask = denominator != 0
                 lerm_matrix[valid_mask] = (2 * np.abs(true_conn[valid_mask] - pred_conn[valid_mask]) / 
                                          denominator[valid_mask])
-                metrics['mean_lerm'] = np.mean(lerm_matrix[triu_mask])
-        except Exception as e:
-            # If matrix logarithm fails (e.g., negative eigenvalues), use fallback
-            self._log(f"Matrix logarithm failed, using fallback LERM: {e}", "warning")
-            with np.errstate(divide='ignore', invalid='ignore'):
-                denominator = true_conn + pred_conn
-                lerm_matrix = np.zeros_like(true_conn)
-                valid_mask = denominator != 0
-                lerm_matrix[valid_mask] = (2 * np.abs(true_conn[valid_mask] - pred_conn[valid_mask]) / 
-                                         denominator[valid_mask])
+                # Handle any remaining NaN/inf values
+                lerm_matrix = np.where(np.isfinite(lerm_matrix), lerm_matrix, 0)
                 metrics['mean_lerm'] = np.mean(lerm_matrix[triu_mask])
         
         # Matrix norms
@@ -800,6 +825,12 @@ class ConnectomeAnalyzer:
         
         # Add correlation info
         comparison_name = f"{connectome1_name}_vs_{connectome2_name}"
+        
+        # Ensure comparison metrics exist - compute them if not already available
+        if comparison_name not in self.metrics:
+            self._log(f"Computing comparison metrics for plot: {comparison_name}", "info")
+            self.compute_comparison_metrics(connectome1_name, connectome2_name, comparison_name)
+        
         if comparison_name in self.metrics:
             r = self.metrics[comparison_name]['pearson_r']
             axes[1, 0].text(0.05, 0.95, f'r = {r:.3f}', transform=axes[1, 0].transAxes,
@@ -827,7 +858,25 @@ class ConnectomeAnalyzer:
         axes[1, 2].set_ylabel('Predicted - True')
         axes[1, 2].set_title('Bland-Altman Plot')
         
-        plt.tight_layout()
+        # Add comparison metrics annotation at the bottom of the figure
+        if comparison_name in self.metrics:
+            metrics = self.metrics[comparison_name]
+            
+            # Format the metrics string with key comparison scores
+            metrics_text = (
+                f"Pearson r: {metrics.get('pearson_r', 'N/A'):.3f}  |  "
+                f"Spearman r: {metrics.get('spearman_r', 'N/A'):.3f}  |  "
+                f"RMSE: {metrics.get('rmse', 'N/A'):.3f}  |  "
+                f"MAE: {metrics.get('mae', 'N/A'):.3f}  |  "
+                f"Mean LERM: {metrics.get('mean_lerm', 'N/A'):.3f}  |  "
+                f"Edge Overlap: {metrics.get('edge_overlap', 'N/A'):.3f}"
+            )
+            
+            # Add text annotation at the bottom of the figure
+            fig.text(0.5, 0.02, metrics_text, ha='center', va='bottom', fontsize=10,
+                    bbox=dict(boxstyle='round,pad=0.5', facecolor='lightgray', alpha=0.8))
+        
+        plt.tight_layout(rect=[0, 0.05, 1, 0.96])  # Adjust layout to leave space for annotation
         
         # Save plot
         plot_path = self.out_path / f"{plot_name}.png"
@@ -1013,10 +1062,11 @@ def analyze_connectomes_from_labels(pred_labels_file: str,
         true_name = f'true_{comp_type}'
         
         if pred_name in analyzer.connectomes and true_name in analyzer.connectomes:
-            # Compute comparison metrics
-            analyzer.compute_comparison_metrics(true_name, pred_name, f'{comp_type}_comparison')
+            # Compute comparison metrics - use consistent naming
+            comparison_name = f"{true_name}_vs_{pred_name}"
+            analyzer.compute_comparison_metrics(true_name, pred_name, comparison_name)
             
-            # Create comparison plot
+            # Create comparison plot - will use the same naming convention
             analyzer.create_comparison_plot(true_name, pred_name, f'{comp_type}_comparison')
             
             # Compute network metrics

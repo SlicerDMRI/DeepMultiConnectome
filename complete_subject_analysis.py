@@ -6,7 +6,7 @@ This script combines comprehensive connectome analysis with testing functionalit
 It performs complete connectome analysis using the unified connectome system with 
 real data, including all diffusion metric weighted connectomes.
 
-Based on comprehensive_analysis.py and test_subject_100206.py
+python3 complete_subject_analysis.py --subject 100206 --streamline-threshold --min-streamlines-per-node 10
 """
 
 import os
@@ -28,6 +28,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils.unified_connectome import ConnectomeAnalyzer, analyze_connectomes_from_labels
 from utils.connectome_utils import create_all_connectomes, compare_all_connectomes
 from utils.logger import create_logger
+from utils.streamline_thresholding import StreamlineThresholder, threshold_subject_data
 
 
 class CompleteSubjectAnalysis:
@@ -61,10 +62,15 @@ class CompleteSubjectAnalysis:
         print(f"Initialized complete analysis for subject {self.subject_id}")
         self.logger.info(f"Initialized complete analysis for subject {self.subject_id}")
     
-    def _find_and_prepare_data_files(self):
-        """Find real predicted and true labels"""
-        print("Searching for real data files...")
-        self.logger.info("Searching for real data files...")
+    def _find_and_prepare_data_files(self, use_thresholded: bool = False, 
+                                     min_streamlines_per_node: int = 10):
+        """Find real predicted and true labels, optionally with thresholding"""
+        if use_thresholded:
+            print(f"Searching for thresholded data files (min {min_streamlines_per_node} streamlines per node)...")
+            self.logger.info(f"Searching for thresholded data files (min {min_streamlines_per_node} streamlines per node)...")
+        else:
+            print("Searching for real data files...")
+            self.logger.info("Searching for real data files...")
         
         pred_files = {}
         true_files = {}
@@ -72,44 +78,71 @@ class CompleteSubjectAnalysis:
         # Create output directory
         self.output_base_dir.mkdir(parents=True, exist_ok=True)
         
-        # Define the specific file paths for each atlas
-        atlas_files = {
-            "aparc+aseg": {
-                "true": self.true_base / "labels_10M_aparc+aseg_symmetric.txt",
-                "pred": self.pred_base / "predictions_aparc+aseg_symmetric.txt"
-            },
-            "aparc.a2009s+aseg": {
-                "true": self.true_base / "labels_10M_aparc.a2009s+aseg_symmetric.txt",
-                "pred": self.pred_base / "predictions_aparc.a2009s+aseg_symmetric.txt"
-            }
-        }
-        
         for atlas in self.atlases:
             print(f"Processing {atlas}...")
             self.logger.info(f"Processing {atlas}...")
             
-            true_labels_file = atlas_files[atlas]["true"]
-            pred_labels_file = atlas_files[atlas]["pred"]
-            
-            # Check if both files exist
-            if true_labels_file.exists() and pred_labels_file.exists():
-                print(f"  ✓ Found true labels: {true_labels_file}")
-                print(f"  ✓ Found predicted labels: {pred_labels_file}")
-                self.logger.info(f"Found true labels: {true_labels_file}")
-                self.logger.info(f"Found predicted labels: {pred_labels_file}")
+            if use_thresholded:
+                # Apply thresholding and get thresholded file paths
+                print(f"  Applying thresholding with minimum {min_streamlines_per_node} streamlines per node...")
+                self.logger.info(f"Applying thresholding for {atlas}")
                 
-                # Use the files directly
-                pred_files[atlas] = str(pred_labels_file)
-                true_files[atlas] = str(true_labels_file)
-                                
+                try:
+                    saved_files = threshold_subject_data(
+                        subject_path=str(self.subject_path),
+                        atlas=atlas,
+                        min_streamlines_per_node=min_streamlines_per_node,
+                        logger=self.logger
+                    )
+                    
+                    if 'true_labels' in saved_files and 'pred_labels' in saved_files:
+                        true_labels_file = Path(saved_files['true_labels'])
+                        pred_labels_file = Path(saved_files['pred_labels'])
+                        
+                        if true_labels_file.exists() and pred_labels_file.exists():
+                            print(f"  ✓ Created thresholded true labels: {true_labels_file}")
+                            print(f"  ✓ Created thresholded predicted labels: {pred_labels_file}")
+                            self.logger.info(f"Created thresholded labels for {atlas}")
+                            
+                            pred_files[atlas] = str(pred_labels_file)
+                            true_files[atlas] = str(true_labels_file)
+                        else:
+                            print(f"  ⚠️  Thresholded files not found after creation")
+                            self.logger.warning(f"Thresholded files not found for {atlas}")
+                            continue
+                    else:
+                        print(f"  ⚠️  Thresholding failed for {atlas}")
+                        self.logger.warning(f"Thresholding failed for {atlas}")
+                        continue
+                        
+                except Exception as e:
+                    print(f"  ⚠️  Thresholding error for {atlas}: {e}")
+                    self.logger.error(f"Thresholding error for {atlas}: {e}")
+                    continue
             else:
-                if not true_labels_file.exists():
-                    print(f"  ⚠️  True labels file not found: {true_labels_file}")
-                    self.logger.warning(f"True labels file not found: {true_labels_file}")
-                if not pred_labels_file.exists():
-                    print(f"  ⚠️  Predicted labels file not found: {pred_labels_file}")
-                    self.logger.warning(f"Predicted labels file not found: {pred_labels_file}")
-                continue
+                # Use original files
+                true_labels_file = self.true_base / f"labels_10M_{atlas}_symmetric.txt"
+                pred_labels_file = self.pred_base / f"predictions_{atlas}_symmetric.txt"
+                
+                # Check if both files exist
+                if true_labels_file.exists() and pred_labels_file.exists():
+                    print(f"  ✓ Found true labels: {true_labels_file}")
+                    print(f"  ✓ Found predicted labels: {pred_labels_file}")
+                    self.logger.info(f"Found true labels: {true_labels_file}")
+                    self.logger.info(f"Found predicted labels: {pred_labels_file}")
+                    
+                    # Use the files directly
+                    pred_files[atlas] = str(pred_labels_file)
+                    true_files[atlas] = str(true_labels_file)
+                                    
+                else:
+                    if not true_labels_file.exists():
+                        print(f"  ⚠️  True labels file not found: {true_labels_file}")
+                        self.logger.warning(f"True labels file not found: {true_labels_file}")
+                    if not pred_labels_file.exists():
+                        print(f"  ⚠️  Predicted labels file not found: {pred_labels_file}")
+                        self.logger.warning(f"Predicted labels file not found: {pred_labels_file}")
+                    continue
         
         if not pred_files or not true_files:
             print("❌ No valid data file pairs found! Check if both true and predicted labels exist.")
@@ -306,6 +339,7 @@ class CompleteSubjectAnalysis:
             return False
     
     def run_comprehensive_analysis(self, atlas: str, pred_labels_file: str, true_labels_file: str, 
+                                 use_thresholded: bool = False, min_streamlines_per_node: int = 10,
                                  apply_thresholding: bool = False, threshold_percentage: float = 5.0, 
                                  min_streamlines: int = 5, apply_length_filtering: bool = False,
                                  min_length: float = 20.0, max_length: Optional[float] = None,
@@ -317,15 +351,20 @@ class CompleteSubjectAnalysis:
             atlas: Atlas name
             pred_labels_file: Path to predicted labels file
             true_labels_file: Path to true labels file
-            apply_thresholding: Whether to apply node thresholding
-            threshold_percentage: Percentage of nodes to filter out
-            min_streamlines: Minimum number of streamlines for a node to keep
+            use_thresholded: Whether using thresholded data
+            min_streamlines_per_node: Minimum streamlines per node for thresholding
+            apply_thresholding: Whether to apply node thresholding (legacy parameter)
+            threshold_percentage: Percentage of nodes to filter out (legacy parameter)
+            min_streamlines: Minimum number of streamlines for a node to keep (legacy parameter)
             apply_length_filtering: Whether to apply streamline length filtering
             min_length: Minimum streamline length in mm
             max_length: Maximum streamline length in mm (optional)
             lengths_file: Path to streamline lengths file (auto-detected if None)
         """
-        print(f"\n🔸 Analyzing {atlas}")
+        if use_thresholded:
+            print(f"\n🔸 Analyzing {atlas} (thresholded with min {min_streamlines_per_node} streamlines per node)")
+        else:
+            print(f"\n🔸 Analyzing {atlas}")
         self.logger.info(f"Analyzing {atlas}")
         
         # Auto-detect lengths file if not provided but length filtering is requested
@@ -347,8 +386,14 @@ class CompleteSubjectAnalysis:
                 self.logger.warning("Length filtering requested but no lengths file found. Disabling length filtering.")
                 apply_length_filtering = False
         
-        # Set up output directory
-        atlas_output_dir = self.output_base_dir / atlas
+        # Set up output directory based on whether we're using thresholded data
+        if use_thresholded:
+            atlas_output_dir = self.output_base_dir / f"{atlas}_th{min_streamlines_per_node}"
+            diffusion_dir = self.subject_path / "analysis" / f"{atlas}_th{min_streamlines_per_node}"
+        else:
+            atlas_output_dir = self.output_base_dir / atlas
+            diffusion_dir = self.diffusion_dir
+        
         atlas_output_dir.mkdir(parents=True, exist_ok=True)
         
         print(f"  Running comprehensive connectome analysis...")
@@ -362,7 +407,7 @@ class CompleteSubjectAnalysis:
             analyzer = analyze_connectomes_from_labels(
                 pred_labels_file=pred_labels_file,
                 true_labels_file=true_labels_file,
-                diffusion_metrics_dir=str(self.diffusion_dir),
+                diffusion_metrics_dir=str(diffusion_dir),
                 atlas=atlas,
                 out_path=str(atlas_output_dir),
                 logger=self.logger,
@@ -407,12 +452,14 @@ class CompleteSubjectAnalysis:
                 self.logger.info(f"Connections: {connections}")
                 
                 return {
-                    'atlas': atlas,
+                    'atlas': atlas if not use_thresholded else f"{atlas}_th{min_streamlines_per_node}",
                     'correlation': correlation,
                     'rmse': rmse,
                     'mean_lerm': mean_lerm,
                     'connections': connections,
-                    'analyzer': analyzer
+                    'analyzer': analyzer,
+                    'use_thresholded': use_thresholded,
+                    'min_streamlines_per_node': min_streamlines_per_node if use_thresholded else None
                 }
             else:
                 print(f"  ✗ Analysis failed - no results generated")
@@ -426,18 +473,22 @@ class CompleteSubjectAnalysis:
             traceback.print_exc()
             return None
     
-    def run_complete_analysis(self, run_tests: bool = False, apply_thresholding: bool = False,
-                            threshold_percentage: float = 5.0, min_streamlines: int = 5,
-                            apply_length_filtering: bool = False, min_length: float = 20.0,
-                            max_length: Optional[float] = None, lengths_file: Optional[str] = None):
+    def run_complete_analysis(self, run_tests: bool = False, 
+                            use_thresholding: bool = False, min_streamlines_per_node: int = 10,
+                            apply_thresholding: bool = False, threshold_percentage: float = 5.0, 
+                            min_streamlines: int = 5, apply_length_filtering: bool = False, 
+                            min_length: float = 20.0, max_length: Optional[float] = None, 
+                            lengths_file: Optional[str] = None):
         """
         Run the complete analysis including tests and comprehensive connectome analysis
         
         Args:
             run_tests: Whether to run system tests first
-            apply_thresholding: Whether to apply node thresholding
-            threshold_percentage: Percentage of nodes to filter out
-            min_streamlines: Minimum number of streamlines for a node to keep
+            use_thresholding: Whether to apply streamline-level thresholding
+            min_streamlines_per_node: Minimum streamlines per node for thresholding
+            apply_thresholding: Whether to apply node thresholding (legacy parameter)
+            threshold_percentage: Percentage of nodes to filter out (legacy parameter)
+            min_streamlines: Minimum number of streamlines for a node to keep (legacy parameter)
             apply_length_filtering: Whether to apply streamline length filtering
             min_length: Minimum streamline length in mm
             max_length: Maximum streamline length in mm (optional)
@@ -447,8 +498,10 @@ class CompleteSubjectAnalysis:
         print("COMPLETE SUBJECT ANALYSIS")  
         print("Subject:", self.subject_id)
         print("Output directory:", self.output_base_dir)
+        if use_thresholding:
+            print(f"Streamline thresholding enabled: min {min_streamlines_per_node} streamlines per node")
         if apply_thresholding:
-            print(f"Thresholding enabled: {threshold_percentage}% nodes removed, min {min_streamlines} streamlines")
+            print(f"Node thresholding enabled: {threshold_percentage}% nodes removed, min {min_streamlines} streamlines")
         if apply_length_filtering:
             length_desc = f"≥{min_length}mm"
             if max_length is not None:
@@ -460,8 +513,10 @@ class CompleteSubjectAnalysis:
         self.logger.info("COMPLETE SUBJECT ANALYSIS")
         self.logger.info(f"Subject: {self.subject_id}")
         self.logger.info(f"Output directory: {self.output_base_dir}")
+        if use_thresholding:
+            self.logger.info(f"Streamline thresholding enabled: min {min_streamlines_per_node} streamlines per node")
         if apply_thresholding:
-            self.logger.info(f"Thresholding enabled: {threshold_percentage}% nodes removed, min {min_streamlines} streamlines")
+            self.logger.info(f"Node thresholding enabled: {threshold_percentage}% nodes removed, min {min_streamlines} streamlines")
         self.logger.info("="*80)
         
         start_time = time.time()
@@ -474,7 +529,10 @@ class CompleteSubjectAnalysis:
                 self.logger.warning("System tests failed, but continuing with analysis...")
         
         # Find and prepare data files
-        pred_files, true_files = self._find_and_prepare_data_files()
+        pred_files, true_files = self._find_and_prepare_data_files(
+            use_thresholded=use_thresholding, 
+            min_streamlines_per_node=min_streamlines_per_node
+        )
         
         if pred_files is None or true_files is None:
             print("❌ Failed to find or prepare data files!")
@@ -498,9 +556,18 @@ class CompleteSubjectAnalysis:
             print(f"  True labels: {true_files[atlas]}")
             
             # Run comprehensive analysis
-            result = self.run_comprehensive_analysis(atlas, pred_files[atlas], true_files[atlas],
-                                                   apply_thresholding, threshold_percentage, min_streamlines,
-                                                   apply_length_filtering, min_length, max_length, lengths_file)
+            result = self.run_comprehensive_analysis(
+                atlas, pred_files[atlas], true_files[atlas],
+                use_thresholded=use_thresholding, 
+                min_streamlines_per_node=min_streamlines_per_node,
+                apply_thresholding=apply_thresholding, 
+                threshold_percentage=threshold_percentage, 
+                min_streamlines=min_streamlines,
+                apply_length_filtering=apply_length_filtering, 
+                min_length=min_length, 
+                max_length=max_length, 
+                lengths_file=lengths_file
+            )
             
             if result is not None:
                 all_results.append(result)
@@ -655,11 +722,17 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description='Complete Subject Analysis')
     parser.add_argument('--subject', '-s', default='100206', help='Subject ID')
-    parser.add_argument('--tests', action='store_true', help='Skip system tests')
+    parser.add_argument('--tests', action='store_true', help='Run system tests')
     parser.add_argument('--tests-only', action='store_true', help='Run only system tests')
     
-    # Thresholding arguments
-    parser.add_argument('--threshold', action='store_true', help='Apply connectome thresholding')
+    # Streamline-level thresholding arguments (new robust system)
+    parser.add_argument('--streamline-threshold', action='store_true', 
+                       help='Apply streamline-level thresholding based on node connectivity')
+    parser.add_argument('--min-streamlines-per-node', type=int, default=10,
+                       help='Minimum streamlines per node to keep (default: 10)')
+    
+    # Legacy node thresholding arguments (kept for compatibility)
+    parser.add_argument('--threshold', action='store_true', help='Apply connectome thresholding (legacy)')
     parser.add_argument('--threshold-percentage', type=float, default=5.0, 
                        help='Percentage of nodes to filter out (default: 5.0)')
     parser.add_argument('--min-streamlines', type=int, default=5,
@@ -692,6 +765,8 @@ def main():
         run_tests = args.tests
         results = analysis.run_complete_analysis(
             run_tests=run_tests,
+            use_thresholding=args.streamline_threshold,
+            min_streamlines_per_node=args.min_streamlines_per_node,
             apply_thresholding=args.threshold,
             threshold_percentage=args.threshold_percentage,
             min_streamlines=args.min_streamlines,
