@@ -1,5 +1,4 @@
 #!/bin/bash
-
 #==============================================================================
 # TRACTOGRAPHY PROCESSING SCRIPT
 #==============================================================================
@@ -15,7 +14,7 @@
 # - Diffusion metric-weighted connectomes (FA, MD, AD, RD)
 #
 # USAGE:
-#   bash tractography.sh <SUBJECT_ID_OR_FILE> <DATA_DIR> [NUM_JOBS]
+#   bash tractography.sh <SUBJECT_ID_OR_FILE> <DATA_DIR> [NUM_JOBS] [THREADS_PER_JOB]
 #
 # PARAMETERS:
 #   SUBJECT_ID_OR_FILE - Either:
@@ -23,21 +22,28 @@
 #                        - "all" to process all subjects in the data directory
 #                        - Path to a text file containing subject IDs (one per line)
 #   DATA_DIR           - Absolute path to the directory containing subject folders
-#   NUM_JOBS           - (Optional) Number of parallel jobs when using GNU parallel
-#                        (ignored in sequential mode, kept for backward compatibility)
+#   NUM_JOBS           - (Optional) Number of parallel jobs (subjects to process simultaneously)
+#                        Default: 1 (sequential processing)
+#                        Recommended: CPU_cores / THREADS_PER_JOB (e.g., 64/8 = 8 jobs)
+#   THREADS_PER_JOB    - (Optional) Number of threads per subject/job
+#                        Default: 8
+#                        Recommended: 4-16 depending on available cores
 #
 # EXAMPLES:
-#   # Process a single subject
+#   # Process a single subject with 8 threads
 #   bash tractography.sh 100206 /media/volume/MV_HCP/HCP_MRtrix
 #
-#   # Process all subjects in the data directory
+#   # Process all subjects sequentially with 8 threads each
 #   bash tractography.sh all /media/volume/MV_HCP/HCP_MRtrix
 #
-#   # Process subjects from a custom list file
-#   bash tractography.sh /media/volume/MV_HCP/subjects_tractography_output_1000_test.txt /media/volume/MV_HCP/HCP_MRtrix
+#   # Process subjects from a list in parallel: 8 jobs, 8 threads each (64 cores total)
+#   bash tractography.sh /path/to/subjects.txt /media/volume/MV_HCP/HCP_MRtrix 8 8
 #
-#   # Process all subjects in parallel (requires GNU parallel)
-#   bash tractography.sh all /media/volume/MV_HCP/HCP_MRtrix 4
+#   # Process all subjects: 4 jobs in parallel, 16 threads each (64 cores total)
+#   bash tractography.sh all /media/volume/MV_HCP/HCP_MRtrix 4 16
+#
+#   # Maximum parallelization: 16 jobs, 4 threads each (64 cores total)
+#   bash tractography.sh subjects.txt /media/volume/MV_HCP/HCP_MRtrix 16 4
 #
 # EXPECTED DATA STRUCTURE:
 #   DATA_DIR/
@@ -82,11 +88,44 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-subject_id=$1  # e.g., 100206, 'all', or path to subject list file
-data_dir=$2    # folder that contains the subjects
-num_jobs=$3    # number of parallel jobs
+# Parse command-line arguments
+SUBJECT_INPUT="$1"       # e.g., 100206, 'all', or path to subject list file
+DATA_DIR="$2"            # folder that contains the subjects
+NUM_JOBS="${3:-1}"       # Default to 1 job (sequential)
+THREADS_PER_JOB="${4:-8}" # Default to 8 threads per job
 
-threading="-nthreads 4" # Set the max number of threads process can use (e.g. number of cores)
+# Validate inputs
+if [ -z "$SUBJECT_INPUT" ] || [ -z "$DATA_DIR" ]; then
+    echo "Error: Missing required arguments"
+    echo "Usage: bash tractography.sh <SUBJECT_ID_OR_FILE> <DATA_DIR> [NUM_JOBS] [THREADS_PER_JOB]"
+    echo ""
+    echo "Examples:"
+    echo "  # Single subject, 8 threads"
+    echo "  bash tractography.sh 100206 /media/volume/MV_HCP/HCP_MRtrix"
+    echo ""
+    echo "  # 8 parallel jobs, 8 threads each (64 cores total)"
+    echo "  bash tractography.sh subjects.txt /media/volume/MV_HCP/HCP_MRtrix 8 8"
+    echo ""
+    echo "  # 4 parallel jobs, 16 threads each (64 cores total)"
+    echo "  bash tractography.sh all /media/volume/MV_HCP/HCP_MRtrix 4 16"
+    exit 1
+fi
+
+# Calculate total cores that will be used
+TOTAL_CORES=$((NUM_JOBS * THREADS_PER_JOB))
+
+echo "================================================================================"
+echo "Tractography Pipeline Configuration"
+echo "================================================================================"
+echo "Data directory: $DATA_DIR"
+echo "Parallel jobs: $NUM_JOBS"
+echo "Threads per job: $THREADS_PER_JOB"
+echo "Total cores used: $TOTAL_CORES"
+echo "================================================================================"
+echo ""
+
+# Set threading parameter for MRtrix commands
+threading="-nthreads $THREADS_PER_JOB"
 
 process_subject() {
     local subject_id=$1
@@ -104,6 +143,14 @@ process_subject() {
     else
         echo -e "${RED}[INFO]${NC} `date`: Skipping ${subject_id}, output directory already exists."
         # return #! uncomment to skip subjects with existing output
+    fi
+
+    # If any FA-weighted connectome already exists for the common parcellations, skip this subject
+    # existing="${output_dir}/connectome_matrix_FA_mean_aparc+aseg.csv"
+    existing="${output_dir}/connectome_matrix_SIFT_sum_aparc+aseg.csv"
+    if [ -f "${existing}" ]; then
+        echo -e "${RED}[INFO]${NC} `date`: Skipping ${subject_id}, connectome already exists: ${existing}"
+        return
     fi
 
     log_file="${data_dir}/${subject_id}/output/tractography_log.txt"
@@ -542,29 +589,75 @@ process_subject() {
     # Call the Python script to clean the log file
     python3 ./clean_log.py "${log_file}"
     echo "Log file cleaned!"
+
+    # Remove intermediate tract files to save space
+    for f in "${tracts}" "${tracts_MNI}" "${tracts_vtk}"; do # "${tracts_vtk_MNI}"; do
+        if [ -n "${f}" ] && [ -f "${f}" ]; then
+            echo -e "${GREEN}[INFO]${NC} `date`: Removing ${f}" | tee -a "${log_file}"
+            rm -f "${f}" 2>&1 | tee -a "${log_file}"
+        fi
+    done
 }
 
 
-if [ "${subject_id}" == "all" ]; then
+if [ "${SUBJECT_INPUT}" == "all" ]; then
     # Get a list of all subjects in the data directory
-    subjects=$(ls "${data_dir}" | grep -E '^[0-9]{6}$')
+    subjects=$(ls "${DATA_DIR}" | grep -E '^[0-9]{6}$')
     subject_count=$(echo "${subjects}" | wc -l)
     
-    echo -e "${GREEN}[INFO]${NC} `date`: Processing ${subject_count} subjects from data directory: ${data_dir}"
+    echo -e "${GREEN}[INFO]${NC} `date`: Processing ${subject_count} subjects from data directory: ${DATA_DIR}"
     echo -e "${GREEN}[INFO]${NC} `date`: Subject list: $(echo ${subjects} | tr '\n' ' ')"
     
-    # Process each subject one at a time
-    current=1
-    for subject in ${subjects}; do
-        echo -e "${GREEN}[INFO]${NC} `date`: Starting processing for subject: ${subject} (${current}/${subject_count})"
-        process_subject "${subject}" "${data_dir}"
-        echo -e "${GREEN}[INFO]${NC} `date`: Completed processing for subject: ${subject} (${current}/${subject_count})"
-        echo "----------------------------------------"
-        ((current++))
-    done
-elif [ -f "${subject_id}" ]; then
+    if [ "$NUM_JOBS" -gt 1 ]; then
+        # Parallel processing using bash job control
+        echo -e "${GREEN}[INFO]${NC} `date`: Running ${NUM_JOBS} parallel jobs with ${THREADS_PER_JOB} threads each"
+        
+        # Check if GNU parallel is available
+        if command -v parallel &> /dev/null; then
+            # Use GNU parallel if available
+            export -f process_subject
+            export DATA_DIR threading RED GREEN NC
+            echo "${subjects}" | parallel -j "$NUM_JOBS" --line-buffer "process_subject {} $DATA_DIR"
+        else
+            # Fallback to bash job control
+            echo -e "${GREEN}[INFO]${NC} Note: GNU parallel not found, using bash job control"
+            
+            running_jobs=0
+            current=1
+            
+            for subject in ${subjects}; do
+                # Wait if we've reached the max number of parallel jobs
+                while [ $running_jobs -ge $NUM_JOBS ]; do
+                    wait -n  # Wait for any job to finish
+                    running_jobs=$((running_jobs - 1))
+                done
+                
+                # Start new job in background
+                echo -e "${GREEN}[INFO]${NC} `date`: Starting processing for subject: ${subject} (${current}/${subject_count})"
+                process_subject "${subject}" "${DATA_DIR}" &
+                running_jobs=$((running_jobs + 1))
+                current=$((current + 1))
+            done
+            
+            # Wait for all remaining jobs to complete
+            wait
+            echo -e "${GREEN}[INFO]${NC} `date`: All parallel jobs completed"
+        fi
+    else
+        # Sequential processing
+        current=1
+        for subject in ${subjects}; do
+            echo -e "${GREEN}[INFO]${NC} `date`: Starting processing for subject: ${subject} (${current}/${subject_count})"
+            process_subject "${subject}" "${DATA_DIR}"
+            echo -e "${GREEN}[INFO]${NC} `date`: Completed processing for subject: ${subject} (${current}/${subject_count})"
+            echo "----------------------------------------"
+            ((current++))
+        done
+    fi
+    
+elif [ -f "${SUBJECT_INPUT}" ]; then
     # Read subjects from the specified text file
-    subjects_file="${subject_id}"
+    subjects_file="${SUBJECT_INPUT}"
     
     # Read subjects from file, removing any potential whitespace
     subjects=$(cat "${subjects_file}" | tr -d '\r' | grep -v '^$')
@@ -573,16 +666,54 @@ elif [ -f "${subject_id}" ]; then
     echo -e "${GREEN}[INFO]${NC} `date`: Processing ${subject_count} subjects from file: ${subjects_file}"
     echo -e "${GREEN}[INFO]${NC} `date`: Subject list: $(echo ${subjects} | tr '\n' ' ')"
     
-    # Process each subject one at a time
-    current=1
-    for subject in ${subjects}; do
-        echo -e "${GREEN}[INFO]${NC} `date`: Starting processing for subject: ${subject} (${current}/${subject_count})"
-        process_subject "${subject}" "${data_dir}"
-        echo -e "${GREEN}[INFO]${NC} `date`: Completed processing for subject: ${subject} (${current}/${subject_count})"
-        echo "----------------------------------------"
-        ((current++))
-    done
+    if [ "$NUM_JOBS" -gt 1 ]; then
+        # Parallel processing using bash job control
+        echo -e "${GREEN}[INFO]${NC} `date`: Running ${NUM_JOBS} parallel jobs with ${THREADS_PER_JOB} threads each"
+        
+        # Check if GNU parallel is available
+        if command -v parallel &> /dev/null; then
+            # Use GNU parallel if available
+            export -f process_subject
+            export DATA_DIR threading RED GREEN NC
+            echo "${subjects}" | parallel -j "$NUM_JOBS" --line-buffer "process_subject {} $DATA_DIR"
+        else
+            # Fallback to bash job control
+            echo -e "${GREEN}[INFO]${NC} Note: GNU parallel not found, using bash job control"
+            
+            running_jobs=0
+            current=1
+            
+            for subject in ${subjects}; do
+                # Wait if we've reached the max number of parallel jobs
+                while [ $running_jobs -ge $NUM_JOBS ]; do
+                    wait -n  # Wait for any job to finish
+                    running_jobs=$((running_jobs - 1))
+                done
+                
+                # Start new job in background
+                echo -e "${GREEN}[INFO]${NC} `date`: Starting processing for subject: ${subject} (${current}/${subject_count})"
+                process_subject "${subject}" "${DATA_DIR}" &
+                running_jobs=$((running_jobs + 1))
+                current=$((current + 1))
+            done
+            
+            # Wait for all remaining jobs to complete
+            wait
+            echo -e "${GREEN}[INFO]${NC} `date`: All parallel jobs completed"
+        fi
+    else
+        # Sequential processing
+        current=1
+        for subject in ${subjects}; do
+            echo -e "${GREEN}[INFO]${NC} `date`: Starting processing for subject: ${subject} (${current}/${subject_count})"
+            process_subject "${subject}" "${DATA_DIR}"
+            echo -e "${GREEN}[INFO]${NC} `date`: Completed processing for subject: ${subject} (${current}/${subject_count})"
+            echo "----------------------------------------"
+            ((current++))
+        done
+    fi
+    
 else
     # Process single subject
-    process_subject "${subject_id}" "${data_dir}"
+    process_subject "${SUBJECT_INPUT}" "${DATA_DIR}"
 fi

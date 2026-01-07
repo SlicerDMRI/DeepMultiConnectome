@@ -137,6 +137,23 @@ if __name__ == "__main__":
         for key, value in dict(sorted(wrong_dict.items(), key=lambda item: item[1])).items():
             outfile.write(f"{key} {len(value)}\n")
     
+    # Write true-labelled groups (correct predictions grouped by their true label)
     write_dict(label_dict, min_fibers=10, output_dir=os.path.join(out_path, 'true'))
+
+    # Write mispredicted fibers grouped by predicted label (existing behavior)
     write_dict(wrong_dict, min_fibers=1, output_dir=os.path.join(out_path, 'false'))
+
+    # Additionally, write mispredicted fibers grouped by their TRUE label so you can
+    # inspect which true connections had fibers predicted elsewhere.
+    wrong_by_true = {}
+    for pred_pair, indices in wrong_dict.items():
+        for idx in indices:
+            true_pair = tuple(true_labels[idx])
+            if true_pair not in wrong_by_true:
+                wrong_by_true[true_pair] = []
+            wrong_by_true[true_pair].append(idx)
+
+    false_by_true_dir = os.path.join(out_path, 'false_by_true')
+    os.makedirs(false_by_true_dir, exist_ok=True)
+    write_dict(wrong_by_true, min_fibers=1, output_dir=false_by_true_dir)
     

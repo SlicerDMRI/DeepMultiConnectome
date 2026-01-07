@@ -124,6 +124,13 @@ class ConnectomeAnalyzer:
             
             # Parse values maintaining positions
             max_values = min(len(values), expected_length)
+            
+            # CRITICAL FIX: If the metric file is significantly shorter than expected (e.g. corruption),
+            # discard it entirely rather than populating only the first few streamlines.
+            if len(values) < expected_length * 0.5 and len(values) > 0:
+                self._log(f"Metric {metric_name}: CRITICAL - File has {len(values)} values, expected {expected_length}. Discarding to avoid bias.", "warning")
+                return np.full(expected_length, np.nan)
+
             for i in range(max_values):
                 val = values[i]
                 if val.lower() == 'nan':

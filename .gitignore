@@ -109,3 +109,5 @@ ENV/
 
 # Rope project settings
 .ropeproject
+analysis/population_results
+analysis/interintra_similarity_results_log
