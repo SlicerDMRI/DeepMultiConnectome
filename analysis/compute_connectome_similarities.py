@@ -3,8 +3,8 @@
 Compute Connectome Similarities
 
 This script computes similarity metrics between predicted connectomes and various ground truth references:
-1. Intra-subject: Predicted vs True (same subject)
-2. Inter-subject: Predicted vs True (all other subjects)
+1. Intrasubject: Predicted vs True (same subject)
+2. Intersubject: Predicted vs True (all other subjects)
 3. Population: Predicted vs Training Population Average
 
 Metrics:
@@ -49,7 +49,7 @@ current_dir = Path(__file__).parent
 sys.path.append(str(current_dir.parent))
 sys.path.append(str(Path("/media/volume/HCP_diffusion_MV/DeepMultiConnectome")))
 
-from utils.logger import create_logger
+#from utils.logger import create_logger
 import matplotlib
 matplotlib.rcParams['font.family'] = 'DejaVu Sans'
 
@@ -278,7 +278,7 @@ class ConnectomeSimilarityAnalysis:
                 
                 # 2. Pearson Correlation 
                 # -----------------------------------
-                # Intra-subject (Pred_i vs True_i): Row-wise correlation
+                # Intrasubject (Pred_i vs True_i): Row-wise correlation
                 # Vectorized Pearson Row-wise:
                 # corr(x, y) = ((x - mean_x) . (y - mean_y)) / (std_x * std_y * len)
                 # Using cdist is cleaner but standard cdist computes ALL pairs.
@@ -320,7 +320,7 @@ class ConnectomeSimilarityAnalysis:
 
                 # 3. LERM 
                 # --------------------
-                # Needs Logm of FULL MATRICES first
+                # Needs Logm of full matrices
                 # We need to re-loop to compute logms or do it in parallel before.
                 # Since we are inside the loop, let's just do it here. 
                 # For 164x164, logm is fast enough per subject (order of ms).
@@ -386,7 +386,7 @@ class ConnectomeSimilarityAnalysis:
                     # Intra
                     results.append({
                         'subject_id': sub, 'atlas': atlas, 'connectome_type': ctype,
-                        'comparison_type': 'Intra-subject',
+                        'comparison_type': 'Intrasubject',
                         'pearson_r': intra_r_vals[i], 
                         'lerm_dist': intra_lerm_vals[i] if valid_lerm_mask[i] else np.nan
                     })
@@ -394,7 +394,7 @@ class ConnectomeSimilarityAnalysis:
                     # Inter
                     results.append({
                         'subject_id': sub, 'atlas': atlas, 'connectome_type': ctype,
-                        'comparison_type': 'Inter-subject',
+                        'comparison_type': 'Intersubject',
                         'pearson_r': inter_r_means[i], 
                         'lerm_dist': inter_lerm_means[i] if valid_lerm_mask[i] else np.nan
                     })
@@ -456,7 +456,7 @@ class ConnectomeSimilarityAnalysis:
         self.logger.info(f"Successfully loaded {len(all_subjects_data)} subjects.")
 
         # 3. Compute Comparisons 
-        self.logger.info("Computing similarity metrics (Vectorized Intra, Inter, Group)...")
+        self.logger.info("Computing similarity metrics (Intra, Inter, Group)...")
         all_results = self.compute_all_comparisons_vectorized(all_subjects_data, population_avgs)
 
         # 4. Save Results
@@ -472,9 +472,80 @@ class ConnectomeSimilarityAnalysis:
         # 5. Create Summary Statistics
         self.create_summary_statistics(df_results)
 
-        # 6. Create Plot
+        # 6. Compute Significance Tests
+        self.compute_significance_tests(df_results)
+
+        # 7. Create Plot
         self.create_summary_plot(df_results)
         self.logger.info("Analysis Complete.")
+
+    def compute_significance_tests(self, df):
+        """
+        Compute Wilcoxon signed-rank tests for Intra vs Inter and Intra vs Group.
+        Output results to a text file.
+        """
+        self.logger.info("Computing significance tests...")
+        out_file = self.results_dir / "significance_tests.txt"
+        
+        with open(out_file, 'w') as f:
+            f.write("Significance Tests (Wilcoxon Signed-Rank Test)\n")
+            f.write("="*60 + "\n\n")
+            
+            # Group keys
+            atlases = df['atlas'].unique()
+            ctypes = df['connectome_type'].unique()
+            metrics = ['pearson_r', 'lerm_dist']
+            
+            for atlas in sorted(atlases):
+                for ctype in sorted(ctypes):
+                    f.write(f"Configuration: Atlas={atlas}, Type={ctype}\n")
+                    f.write("-" * 50 + "\n")
+                    
+                    subset = df[(df['atlas'] == atlas) & (df['connectome_type'] == ctype)]
+                    
+                    # Prepare data: Pivot to have subjects as index and comparison_type as columns
+                    # We need to ensure we have paired data
+                    pivot = subset.pivot(index='subject_id', columns='comparison_type', values=metrics)
+                    
+                    # Flatten columns (metric, comparison_type)
+                    # columns will be MultiIndex
+                    
+                    for metric in metrics:
+                        f.write(f"  Metric: {metric}\n")
+                        
+                        # Extract paired arrays
+                        try:
+                            # Columns are (metric, type)
+                            intra = pivot[(metric, 'Intrasubject')]
+                            inter = pivot[(metric, 'Intersubject')]
+                            group = pivot[(metric, 'Group-average')]
+                            
+                            # Drop NaNs for paired tests
+                            # Pair: Intra vs Inter
+                            pair1 = pd.concat([intra, inter], axis=1).dropna()
+                            if len(pair1) > 1:
+                                stat, p = stats.wilcoxon(pair1.iloc[:, 0], pair1.iloc[:, 1])
+                                sig = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "ns"
+                                f.write(f"    Intra vs Inter:   W={stat:.1f}, p={p:.2e} ({sig})\n")
+                            else:
+                                f.write("    Intra vs Inter:   Not enough data\n")
+                                
+                            # Pair: Intra vs Group
+                            pair2 = pd.concat([intra, group], axis=1).dropna()
+                            if len(pair2) > 1:
+                                stat, p = stats.wilcoxon(pair2.iloc[:, 0], pair2.iloc[:, 1])
+                                sig = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "ns"
+                                f.write(f"    Intra vs Group:   W={stat:.1f}, p={p:.2e} ({sig})\n")
+                            else:
+                                f.write("    Intra vs Group:   Not enough data\n")
+                                
+                        except KeyError as e:
+                             f.write(f"    Skipping (Missing Data): {e}\n")
+                        
+                        f.write("\n")
+                    f.write("\n")
+        
+        self.logger.info(f"Significance tests saved to {out_file}")
 
     def create_summary_statistics(self, df):
         """
@@ -521,7 +592,7 @@ class ConnectomeSimilarityAnalysis:
         # Setup plot style
         # Force font in seaborn context and style to ensure it sticks
         font_settings = {'font.family': 'DejaVu Sans', 'font.sans-serif': ['DejaVu Sans']}
-        sns.set_context("notebook", font_scale=1.4, rc=font_settings)
+        sns.set_context("notebook", font_scale=1.2, rc=font_settings)
         sns.set_style("white", rc=font_settings)
         
         # Global matplotlib update just in case
@@ -532,14 +603,14 @@ class ConnectomeSimilarityAnalysis:
         fdict = {'family': 'DejaVu Sans'}
         
         # Setup figure
-        fig, axes = plt.subplots(2, 3, figsize=(18, 10), constrained_layout=True)
+        fig, axes = plt.subplots(2, 3, figsize=(20, 12), constrained_layout=True)
         
         metrics = [('pearson_r', "Pearson's r"), ('lerm_dist', 'LERM Distance')]
         
         # Custom palette
         palette = {
-            'Intra-subject': 'royalblue',
-            'Inter-subject': 'firebrick',
+            'Intrasubject': 'royalblue',
+            'Intersubject': 'firebrick',
             'Group-average': 'forestgreen'
         }
         
@@ -564,7 +635,7 @@ class ConnectomeSimilarityAnalysis:
                     ax=ax,
                     palette=palette,
                     order=['84 ROIs', '164 ROIs'],
-                    hue_order=['Intra-subject', 'Inter-subject', 'Group-average'],
+                    hue_order=['Intrasubject', 'Intersubject', 'Group-average'],
                     showfliers=False
                 )
                 
@@ -584,6 +655,9 @@ class ConnectomeSimilarityAnalysis:
                 ax.set_xlabel("", fontdict=fdict)
                 ax.set_ylabel(metric_name if col_idx == 0 else "", fontdict=fdict)
                 
+                # Gridlines
+                ax.grid(axis='y', linestyle='--', alpha=0.7)
+
                 # Force Tick Fonts
                 ax.tick_params(labelsize=14) 
                 for label in ax.get_xticklabels() + ax.get_yticklabels():
@@ -600,7 +674,7 @@ class ConnectomeSimilarityAnalysis:
              handles, labels = axes[0, 0].get_legend_handles_labels()
              
         if handles:
-            axes[1, 2].legend(handles, labels, loc='lower right', frameon=True, prop={'family': 'DejaVu Sans', 'size': 14})
+            axes[1, 2].legend(handles, labels, loc='lower right', frameon=True, prop={'family': 'DejaVu Sans', 'size': 16})
 
         out_plot = self.plots_dir / "connectome_similarity_summary.png"
         plt.savefig(out_plot, dpi=300, bbox_inches='tight')
@@ -609,7 +683,7 @@ class ConnectomeSimilarityAnalysis:
 
 def main():
     parser = argparse.ArgumentParser(description="Compute Connectome Similarities (Intra, Inter, Group)")
-    parser.add_argument('--subjects_file', type=str, default="/media/volume/MV_HCP/subjects_tractography_output_1000_test_10.txt",
+    parser.add_argument('--subjects_file', type=str, default="/media/volume/MV_HCP/subjects_tractography_output_1000_test.txt",
                       help="Path to subject list file")
     parser.add_argument('--no_diagonal', action='store_true', help="Exclude diagonal elements from calculation")
     
