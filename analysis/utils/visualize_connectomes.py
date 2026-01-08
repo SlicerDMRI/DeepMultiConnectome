@@ -28,9 +28,9 @@ def visualize_subject_connectomes(subject_id, base_path, output_dir):
     
     # Map visual title to file type key (matching compute_connectome_similarities.py)
     weightings_map = {
-        'nos': {'title': 'Number of streamlines-weighted', 'log_scale': True},
-        'fa': {'title': 'mean FA-weighted', 'log_scale': False},
-        'sift2': {'title': 'SIFT2-weighted', 'log_scale': True}
+        'nos': {'title': 'Number of streamlines', 'log_scale': True},
+        'fa': {'title': 'mean FA', 'log_scale': False},
+        'sift2': {'title': 'SIFT2', 'log_scale': True}
     }
     
     # Custom Colormaps
@@ -149,7 +149,7 @@ def visualize_subject_connectomes(subject_id, base_path, output_dir):
             if row_idx == 0: ax_t.set_title("Traditional connectome", fontsize=22, pad=10)
             
             # Label the row on the left
-            ax_t.set_ylabel(row_title, fontsize=20, rotation=90, labelpad=20)
+            ax_t.set_ylabel(row_title+'-weighted', fontsize=20, rotation=90, labelpad=20)
             # Ensure ticks are gone but label remains
             ax_t.tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
             
@@ -184,7 +184,7 @@ def visualize_subject_connectomes(subject_id, base_path, output_dir):
             divider_d = make_axes_locatable(ax_d)
             cax_d = divider_d.append_axes("right", size="5%", pad=0.1)
             cb_d = fig.colorbar(im_d, cax=cax_d)
-            diff_label = f"Difference in\n{metric_label}"
+            diff_label = f"Difference in {metric_label}"
             cb_d.set_label(diff_label, fontsize=18)
             cb_d.ax.tick_params(labelsize=14)
 
