@@ -7,13 +7,19 @@ from pathlib import Path
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
-def visualize_subject_connectomes(subject_id, base_path, output_dir):
+def visualize_subject_connectomes(subject_id, base_path, output_dir, no_diagonal=False):
     """
     Visualizes connectomes for one subject.
     Generates 3 types of plots:
     1. 84 ROIs (Rows: NOS, FA, SIFT2)
     2. 164 ROIs (Rows: NOS, FA, SIFT2)
     3. All combined (6 rows)
+    
+    Args:
+        subject_id: Subject identifier
+        base_path: Base path to data
+        output_dir: Output directory for plots
+        no_diagonal: If True, mask out diagonal elements in visualization
     """
     
     # Configuration
@@ -131,6 +137,21 @@ def visualize_subject_connectomes(subject_id, base_path, output_dir):
                 else:
                     vmin = 0.0
                     norm_conn = mcolors.Normalize(vmin=vmin, vmax=vmax)
+            
+            # Apply diagonal masking AFTER log-scale epsilon is added
+            # This ensures diagonal appears as masked (not white from log(0))
+            if no_diagonal:
+                diag_idx = np.diag_indices(mat_t.shape[0])
+                mat_t[diag_idx] = np.nan
+                mat_p[diag_idx] = np.nan
+                mat_diff[diag_idx] = np.nan
+                # Set colormap to handle NaN as transparent
+                current_cmap = current_cmap.copy()
+                current_cmap.set_bad(color='white', alpha=0)
+                cmap_diff_local = cmap_diff.copy()
+                cmap_diff_local.set_bad(color='white', alpha=0)
+            else:
+                cmap_diff_local = cmap_diff
 
             # Difference Scaling
             max_diff = np.max(np.abs(mat_diff)) if len(mat_diff) > 0 else 1.0
@@ -175,7 +196,7 @@ def visualize_subject_connectomes(subject_id, base_path, output_dir):
 
             # Plot 3: Difference
             ax_d = axes[row_idx, 2]
-            im_d = ax_d.imshow(mat_diff, cmap=cmap_diff, norm=norm_diff, origin='upper')
+            im_d = ax_d.imshow(mat_diff, cmap=cmap_diff_local, norm=norm_diff, origin='upper')
             if row_idx == 0: ax_d.set_title("Difference map", fontsize=22, pad=10)
             
             ax_d.set_xticks([])

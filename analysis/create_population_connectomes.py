@@ -36,11 +36,13 @@ class PopulationConnectomeCreator:
     Creates population average connectomes from training set subjects.
     """
     
-    def __init__(self, base_path: str = "/media/volume/MV_HCP", out_path: str = '/media/volume/HCP_diffusion_MV/DeepMultiConnectome/analysis'):
+    def __init__(self, base_path: str = "/media/volume/MV_HCP", 
+                 out_path: str = '/media/volume/HCP_diffusion_MV/DeepMultiConnectome/analysis',
+                 min_length: float = None):
         """Initialize the population connectome creator"""
         
         self.base_path = Path(base_path)
-
+        self.min_length = min_length
         # Subject lists - only need training subjects
         self.train_subjects_file = self.base_path / "subjects_tractography_output_1000_train_200.txt"
         
@@ -61,6 +63,8 @@ class PopulationConnectomeCreator:
         print(f"Initialized population connectome creator")
         print(f"Training subjects: {len(self.train_subjects)}")
         print(f"Output directory: {self.output_dir}")
+        if self.min_length:
+            print(f"Minimum streamline length: {self.min_length} mm")
         
         self.logger.info(f"Initialized population connectome creator")
         self.logger.info(f"Training subjects: {len(self.train_subjects)}")
@@ -102,6 +106,11 @@ class PopulationConnectomeCreator:
         """
         paths = self._get_subject_paths(subject_id)
         
+        # Determine filename based on metric
+        # If min_length is set, look in the specific analysis subfolder
+        if self.min_length:
+            return self._load_filtered_connectome(subject_id, atlas, metric, connectome_type)
+
         try:
             # Determine filename based on metric for true connectomes
             if metric == 'nos':
@@ -169,6 +178,40 @@ class PopulationConnectomeCreator:
             self.logger.error(f"Error loading connectome for {subject_id} {atlas}: {e}")
             return None
     
+    def _load_filtered_connectome(self, subject_id, atlas, metric, connectome_type):
+        """Load length-filtered connectome. Generate on thy fly if missing."""
+        
+        # Path: HCP_MRtrix/<id>/analysis/<atlas>_minlen<X>
+        minlen_dir = self.base_path / "HCP_MRtrix" / subject_id / "analysis" / f"{atlas}_minlen{int(self.min_length)}"
+        
+        filename = f"connectome_{connectome_type}_{metric}_{atlas}.csv"
+        file_path = minlen_dir / filename
+        
+        if not file_path.exists():
+            # Try generating on the fly?
+            # Or assume user should run generation first?
+            # Let's try to import the generator and run it
+            try:
+                from analysis.utils.filter_streamlines_minlength import filter_and_rebuild_connectomes
+                
+                # Check if generating makes sense (do we have raw files?)
+                # Just catch any error
+                self.logger.info(f"Generating filtered connectomes for {subject_id}...")
+                filter_and_rebuild_connectomes(subject_id, self.min_length, atlas, base_path=self.base_path)
+            except Exception as e:
+                self.logger.warning(f"Failed to generate filtered connectomes for {subject_id}: {e}")
+                return None
+
+        if file_path.exists():
+             try:
+                # Load header-less csv
+                df = pd.read_csv(file_path, header=None)
+                return df.values
+             except Exception as e:
+                self.logger.error(f"Error loading filtered connectome {file_path}: {e}")
+        
+        return None
+
     def compute_population_averages(self, force_recompute: bool = False) -> Dict[str, Dict[str, np.ndarray]]:
         """
         Compute population average connectomes from training subjects
@@ -181,10 +224,14 @@ class PopulationConnectomeCreator:
         """
         print(f"\n{'='*80}")
         print("COMPUTING POPULATION AVERAGE CONNECTOMES")
+        if self.min_length:
+             print(f"Min Length Filter: {self.min_length} mm")
         print(f"{'='*80}")
         self.logger.info("Computing population average connectomes")
         
         average_connectomes = {}
+        
+        len_suffix = f"_minlen{int(self.min_length)}" if self.min_length else ""
         
         for atlas in self.atlases:
             print(f"\nProcessing atlas: {atlas}")
@@ -195,11 +242,11 @@ class PopulationConnectomeCreator:
                 print(f"  Processing connectome type: {connectome_type.upper()}")
                 
                 # Check for cached file
-                cache_file_npy = self.output_dir / f"population_average_{atlas}_{connectome_type}.npy"
-                cache_file_csv = self.output_dir / f"population_average_{atlas}_{connectome_type}.csv"
+                cache_file_npy = self.output_dir / f"population_average_{atlas}_{connectome_type}{len_suffix}.npy"
+                cache_file_csv = self.output_dir / f"population_average_{atlas}_{connectome_type}{len_suffix}.csv"
                 
                 # Also check legacy cache filename for NOS
-                legacy_cache_file = self.output_dir / f"population_average_{atlas}.npy"
+                legacy_cache_file = self.output_dir / f"population_average_{atlas}{len_suffix}.npy"
                 
                 if cache_file_npy.exists() and not force_recompute:
                     print(f"    Loading cached average connectome from {cache_file_npy.name}")
@@ -352,11 +399,13 @@ def main():
                        help='Base path for data (default: /media/volume/MV_HCP)')
     parser.add_argument('--force-recompute', action='store_true',
                        help='Force recomputation of cached results')
+    parser.add_argument('--min_length', type=float, default=None,
+                       help='Minimum streamline length in mm')
     
     args = parser.parse_args()
     
     # Initialize creator
-    creator = PopulationConnectomeCreator(base_path=args.base_path)
+    creator = PopulationConnectomeCreator(base_path=args.base_path, min_length=args.min_length)
     
     # Run
     creator.run(force_recompute=args.force_recompute)

@@ -46,8 +46,8 @@ from scipy.linalg import logm, norm
 import scipy.stats as stats
 # Add path for imports
 current_dir = Path(__file__).parent
-sys.path.append(str(current_dir.parent))
-sys.path.append(str(Path("/media/volume/HCP_diffusion_MV/DeepMultiConnectome")))
+sys.path.insert(0, str(current_dir.parent))
+sys.path.insert(0, str(Path("/media/volume/HCP_diffusion_MV/DeepMultiConnectome")))
 
 #from utils.logger import create_logger
 import matplotlib
@@ -60,6 +60,7 @@ from analysis.utils.analysis_metrics import (
     compute_lerm
 )
 from analysis.utils.visualize_connectomes import visualize_subject_connectomes
+from analysis.utils.filter_streamlines_minlength import filter_and_rebuild_connectomes
 
 # Suppress warnings
 warnings.filterwarnings('ignore', category=RuntimeWarning)
@@ -72,13 +73,14 @@ class ConnectomeSimilarityAnalysis:
     """
    
     def __init__(self, subject_list_file: str, max_subjects: int = None, mask_zeros: bool = False,
-                 no_diagonal: bool = False,
+                 no_diagonal: bool = False, min_length: float = None,
                  atlases: List[str] = None, connectome_types: List[str] = None):
        
         self.subject_list_file = Path(subject_list_file)
         self.max_subjects = max_subjects
         self.mask_zeros = mask_zeros
         self.no_diagonal = no_diagonal
+        self.min_length = min_length
        
         self.base_path = Path("/media/volume/MV_HCP")
         self.population_avg_dir = Path("/media/volume/HCP_diffusion_MV/DeepMultiConnectome/analysis/population_results")
@@ -87,6 +89,8 @@ class ConnectomeSimilarityAnalysis:
         results_dir_name = "similarity_results"
         if self.no_diagonal:
             results_dir_name += "_nodiagonal"
+        if self.min_length:
+            results_dir_name += f"_minlen{int(self.min_length)}"
             
         self.results_dir = Path("/media/volume/HCP_diffusion_MV/DeepMultiConnectome/analysis") / results_dir_name
         self.cache_dir = self.results_dir / "cache"
@@ -154,16 +158,21 @@ class ConnectomeSimilarityAnalysis:
         """Get output directory for predicted connectomes"""
         return self.base_path / "HCP_MRtrix" / subject_id / "TractCloud"
 
-    def load_population_averages(self) -> Dict[str, Dict[str, np.ndarray]]:
-        """Load population averages (computed by create_population_connectomes.py)"""
+    def load_population_averages(self, all_subjects_data: Dict = None) -> Dict[str, Dict[str, np.ndarray]]:
+        """Load population averages (computed by create_population_connectomes.py) or compute from loaded data"""
         pop_avgs = {}
         self.log(f"Loading population averages from {self.population_avg_dir}...")
+        
+        # Ensure directory exists
+        self.population_avg_dir.mkdir(parents=True, exist_ok=True)
+        
+        len_suffix = f"_minlen{int(self.min_length)}" if self.min_length else ""
         
         for atlas in self.atlases:
             pop_avgs[atlas] = {}
             for ctype in self.connectome_types:
                 # Based on create_population_connectomes.py naming convention
-                avg_file = self.population_avg_dir / f"population_average_{atlas}_{ctype}.csv"
+                avg_file = self.population_avg_dir / f"population_average_{atlas}_{ctype}{len_suffix}.csv"
                 if avg_file.exists():
                     try:
                         # Load raw matrix (no header/index)
@@ -173,6 +182,33 @@ class ConnectomeSimilarityAnalysis:
                         self.log(f"  Error loading {avg_file}: {e}")
                 else:
                     self.log(f"  Missing population average for {atlas} {ctype}")
+                    if all_subjects_data:
+                        self.log(f"  Computing population average from {len(all_subjects_data)} loaded subjects...")
+                        try:
+                            # Verify if any subject has this connectome
+                            mats = []
+                            for sub, data in all_subjects_data.items():
+                                if atlas in data and ctype in data[atlas] and 'true' in data[atlas][ctype]:
+                                    mats.append(data[atlas][ctype]['true'])
+                            
+                            if mats:
+                                # Stack and Compute Mean
+                                stack = np.array(mats)
+                                if len(stack) > 0:
+                                    mean_mat = np.nanmean(stack, axis=0) # Handle nan if present (though shouldn't be)
+                                    
+                                    # Save
+                                    pd.DataFrame(mean_mat).to_csv(avg_file, header=False, index=False)
+                                    self.log(f"  Computed and saved new population average to {avg_file}")
+                                    
+                                    pop_avgs[atlas][ctype] = mean_mat
+                                else:
+                                    self.log(f"  No valid matrices found to compute average.")
+                            else:
+                                self.log(f"  No valid matrices found to compute average.")
+                        except Exception as e:
+                            self.log(f"  Error computing population average: {e}")
+                            
         return pop_avgs
 
     def load_subject_connectomes(self, subject_id: str) -> Dict:
@@ -183,11 +219,44 @@ class ConnectomeSimilarityAnalysis:
         def get_filename(atlas, ctype, is_true=True):
             mode = "true" if is_true else "pred"
             return f"connectome_{mode}_{ctype}_{atlas}.csv"
+        
+        # Validation helper
+        def validate_connectome(mat, name, subject_id, atlas, ctype):
+            """Check if connectome is valid (not all zeros)"""
+            total = np.sum(mat)
+            if total == 0:
+                self.log(f"WARNING: {name} connectome for {subject_id} {atlas} {ctype} is all zeros (total={total})")
+                return False
+            return True
 
         for atlas in self.atlases:
             data[atlas] = {}
             # New path convention: HCP_MRtrix/<id>/analysis/<atlas>
-            analysis_dir = self.base_path / "HCP_MRtrix" / subject_id / "analysis" / atlas
+            if self.min_length:
+                # Check/Generate Filters
+                analysis_dir = self.base_path / "HCP_MRtrix" / subject_id / "analysis" / f"{atlas}_minlen{int(self.min_length)}"
+                
+                # Check if we need to generate (if dir missing or key files missing)
+                should_generate = not analysis_dir.exists()
+                if not should_generate:
+                    # Check if ALL expected files exist (NOS, FA, SIFT2)
+                    # If any is missing, we must regenerate
+                    for ctype in self.connectome_types:
+                        # Check True connectomes (filtering generates these)
+                        if not (analysis_dir / get_filename(atlas, ctype, True)).exists():
+                            should_generate = True
+                            self.log(f"Missing {ctype} connectome for {subject_id} {atlas}, triggering regeneration.")
+                            break
+
+                
+                if should_generate:
+                    self.log(f"Generating filtered connectomes (min_length={self.min_length}mm) for {subject_id} {atlas}...")
+                    try:
+                        filter_and_rebuild_connectomes(subject_id, self.min_length, atlas, base_path=str(self.base_path))
+                    except Exception as e:
+                        self.log(f"Error generating filtered connectomes: {e}")
+            else:
+                analysis_dir = self.base_path / "HCP_MRtrix" / subject_id / "analysis" / atlas
            
             for ctype in self.connectome_types:
                 t_file = analysis_dir / get_filename(atlas, ctype, is_true=True)
@@ -208,6 +277,24 @@ class ConnectomeSimilarityAnalysis:
                         if t_mat.shape != p_mat.shape:
                             # self.log(f"Shape mismatch for {subject_id} {atlas} {ctype}: {t_mat.shape} vs {p_mat.shape}")
                             continue
+
+                        # Validate connectomes (check for zeros)
+                        if not validate_connectome(t_mat, "TRUE", subject_id, atlas, ctype):
+                            continue
+                        if not validate_connectome(p_mat, "PRED", subject_id, atlas, ctype):
+                            continue
+                        
+                        # For NOS, check if totals match (should be similar)
+                        if ctype == 'nos':
+                            t_total = np.sum(t_mat)
+                            p_total = np.sum(p_mat)
+                            diff_pct = abs(t_total - p_total) / max(t_total, p_total) * 100 if max(t_total, p_total) > 0 else 0
+                            
+                            # Log path and NOS totals for verification
+                            self.log(f"  {subject_id} {atlas}: TRUE NOS={int(t_total):,}, PRED NOS={int(p_total):,}, diff={diff_pct:.1f}% (from {analysis_dir.name})")
+                            
+                            if diff_pct > 50:  # If more than 50% difference, something is wrong
+                                self.log(f"  WARNING: Large NOS difference ({diff_pct:.1f}%) between true and pred for {subject_id} {atlas}")
 
                         data[atlas][ctype] = {'true': t_mat, 'pred': p_mat}
                     except Exception as e:
@@ -409,11 +496,45 @@ class ConnectomeSimilarityAnalysis:
 
         return results
 
+
+    def _run_minlength_filter_if_needed(self):
+        """
+        If min_length is specified, run the filtering and connectome generation for all subjects
+        that don't already have the output.
+        """
+        if self.min_length is None:
+            return
+
+        from analysis.utils.filter_streamlines_minlength import filter_and_rebuild_connectomes
+        
+        self.log(f"Running filtering (min_length={self.min_length}mm) for all subjects...")
+        
+        for subject in tqdm(self.subjects, desc="Filtering Subjects"):
+            for atlas in self.atlases:
+                # Check if already done?
+                # It's fast enough or we trust the script to overwrite/manage?
+                # Ideally we check if output exists to save time.
+                out_dir = self.base_path / "HCP_MRtrix" / subject / "analysis" / f"{atlas}_minlen{int(self.min_length)}"
+                # Check for at least one critical file
+                check_file = out_dir / f"connectome_true_nos_{atlas}.csv"
+                
+                if check_file.exists():
+                     continue
+
+                try:
+                    # filter_and_rebuild_connectomes saves to the correct analysis folder
+                    filter_and_rebuild_connectomes(subject, self.min_length, atlas, base_path=self.base_path)
+                except Exception as e:
+                    self.logger.error(f"Filtering failed for {subject} {atlas}: {e}")
+
     def run_analysis(self):
         """
         Main execution flow.
         """
         self.logger.info("Starting analysis...")
+        
+        # 1. Pre-run Filtering if requested
+        self._run_minlength_filter_if_needed()
         
         # Example Plots
         if self.subjects:
@@ -423,16 +544,13 @@ class ConnectomeSimilarityAnalysis:
                 visualize_subject_connectomes(
                     first_subject, 
                     str(self.base_path), 
-                    str(self.plots_dir / "examples")
+                    str(self.plots_dir / "examples"),
+                    no_diagonal=self.no_diagonal
                 )
             except Exception as e:
                 self.logger.error(f"Failed to generate example plots: {e}")
         
-        # 1. Load Population Averages
-        self.logger.info("Loading population averages...")
-        population_avgs = self.load_population_averages()
-
-        # 2. Load All Subject Connectomes
+        # 2. Load All Subject Connectomes (MOVED UP)
         self.logger.info(f"Loading connectomes for {len(self.subjects)} subjects...")
         all_subjects_data = {}
         
@@ -455,7 +573,11 @@ class ConnectomeSimilarityAnalysis:
 
         self.logger.info(f"Successfully loaded {len(all_subjects_data)} subjects.")
 
-        # 3. Compute Comparisons 
+        # 3. Load Population Averages (Now using loaded data if needed)
+        self.logger.info("Loading population averages...")
+        population_avgs = self.load_population_averages(all_subjects_data)
+
+        # 4. Compute Comparisons 
         self.logger.info("Computing similarity metrics (Intra, Inter, Group)...")
         all_results = self.compute_all_comparisons_vectorized(all_subjects_data, population_avgs)
 
@@ -686,6 +808,7 @@ def main():
     parser.add_argument('--subjects_file', type=str, default="/media/volume/MV_HCP/subjects_tractography_output_1000_test.txt",
                       help="Path to subject list file")
     parser.add_argument('--no_diagonal', action='store_true', help="Exclude diagonal elements from calculation")
+    parser.add_argument('--min_length', type=float, default=None, help="Minimum streamline length in mm")
     
     # We allow the user to point to a file, or if the file doesn't exist, maybe it's a test run?
     # The user mentions subjects_tractography_output_1000_test.txt in context
@@ -711,7 +834,8 @@ def main():
 
     analyzer = ConnectomeSimilarityAnalysis(
         subject_list_file=subjects_file,
-        no_diagonal=args.no_diagonal
+        no_diagonal=args.no_diagonal,
+        min_length=args.min_length
     )
     
     analyzer.run_analysis()
