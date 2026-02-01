@@ -18,6 +18,20 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import logging
 
+# Simple cache for loaded files to avoid reloading
+_file_cache = {}
+
+def _load_cached_predictions(filepath: Path) -> Optional[np.ndarray]:
+    """Load predictions file with caching."""
+    cache_key = str(filepath)
+    if cache_key not in _file_cache:
+        try:
+            data = np.loadtxt(filepath, dtype=np.int32)
+            _file_cache[cache_key] = data
+        except Exception:
+            return None
+    return _file_cache[cache_key]
+
 
 def get_true_connectome_path(base_path: Path, subject_id: str, atlas: str, 
                              connectome_type: str) -> Path:
@@ -242,11 +256,8 @@ def build_predicted_connectome_from_labels(
         
         # Try to load with numpy for speed (space-separated two-column format)
         try:
-            data = np.loadtxt(predictions_file, dtype=np.int32)
-            if data.ndim == 1:
-                # Single column data - not usable
-                return None
-            if data.shape[1] != 2:
+            data = _load_cached_predictions(predictions_file)
+            if data is None or data.ndim == 1 or data.shape[1] != 2:
                 return None
             
             # Filter valid ROI indices

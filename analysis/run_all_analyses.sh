@@ -1,5 +1,7 @@
 #!/bin/bash
 
+#python compute_trt_similarity.py --subjects_file /media/volume/MV_HCP/subjects_tractography_output_TRT.txt --test_path /media/volume/MV_HCP/HCP_MRtrix_test --retest_path /media/volume/MV_HCP/HCP_MRtrix_retest
+
 ################################################################################
 # Run All Intra/Inter-Subject Connectome Analyses
 #

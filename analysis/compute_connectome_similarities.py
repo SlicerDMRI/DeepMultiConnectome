@@ -547,8 +547,11 @@ class ConnectomeSimilarityAnalysis:
                     str(self.plots_dir / "examples"),
                     no_diagonal=self.no_diagonal
                 )
+                self.logger.info(f"Successfully generated example plots for {first_subject}")
             except Exception as e:
                 self.logger.error(f"Failed to generate example plots: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
         
         # 2. Load All Subject Connectomes (MOVED UP)
         self.logger.info(f"Loading connectomes for {len(self.subjects)} subjects...")

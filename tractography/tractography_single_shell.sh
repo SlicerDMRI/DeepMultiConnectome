@@ -1,14 +1,14 @@
 #!/bin/bash
 #==============================================================================
-# TRACTOGRAPHY PROCESSING SCRIPT
+# SINGLE-SHELL TRACTOGRAPHY PROCESSING SCRIPT FOR TRACTOINFERNO
 #==============================================================================
 # 
 # This script performs complete diffusion MRI tractography processing pipeline
-# including:
+# optimized for single-shell data (b=0, b=1000) including:
 # - Diffusion image preprocessing and conversion
-# - Constrained Spherical Deconvolution (CSD)
+# - Single-Shell Constrained Spherical Deconvolution (CSD)
 # - Diffusion Tensor Imaging (DTI) metrics calculation
-# - Tissue boundary creation using 5TT segmentation
+# - Tissue boundary creation using FreeSurfer-based 5TT segmentation
 # - Probabilistic tractography generation
 # - Structural connectivity matrix computation
 # - Diffusion metric-weighted connectomes (FA, MD, AD, RD)
@@ -196,52 +196,39 @@ process_subject() {
     #################################################################
     start_time_csp=$(date +%s)
 
-    # Estimate the response function using the dhollander method (~4min)
+    # Estimate the response function using tournier algorithm for single-shell data (~2min)
     wm_txt="${dmri_dir}/wm.txt"
-    gm_txt="${dmri_dir}/gm.txt"
-    csf_txt="${dmri_dir}/csf.txt"
-    if [ ! -f ${wm_txt} ] || [ ! -f ${gm_txt} ] || [ ! -f ${csf_txt} ]; then
-        echo -e "${GREEN}[INFO]${NC} `date`: Estimation of response function using dhollander" | tee -a "${log_file}"
-        dwi2response dhollander "${dwi_mif}" "${wm_txt}" "${gm_txt}" "${csf_txt}" \
+    if [ ! -f ${wm_txt} ]; then
+        echo -e "${GREEN}[INFO]${NC} `date`: Estimation of single-shell WM response function using tournier algorithm" | tee -a "${log_file}"
+        dwi2response tournier "${dwi_mif}" "${wm_txt}" \
                                 -voxels "${dmri_dir}/voxels.mif" ${threading} -info 2>&1 | tee -a "${log_file}"
     fi
 
-    # Multi-Shell, Multi-Tissue Constrained Spherical Deconvolution (~33min)
+    # Single-Shell Constrained Spherical Deconvolution (~15min)
     wm_fod="${dmri_dir}/wmfod.mif"
-    gm_fod="${dmri_dir}/gmfod.mif"
-    csf_fod="${dmri_dir}/csffod.mif"
     dwi_mask_dilated="${dmri_dir}/dwi_meanbzero_brain_mask_dilated_2.nii.gz"
-    if [ ! -f ${wm_fod} ] || [ ! -f ${gm_fod} ] || [ ! -f ${csf_fod} ]; then
-        echo -e "${GREEN}[INFO]${NC} `date`: Running Multi-Shell, Multi-Tissue Constrained Spherical Deconvolution" | tee -a "${log_file}"
+    if [ ! -f ${wm_fod} ]; then
+        echo -e "${GREEN}[INFO]${NC} `date`: Running Single-Shell Constrained Spherical Deconvolution" | tee -a "${log_file}"
         
-        # First, creating a dilated brain mask (https://github.com/sina-mansour/UKB-connectomics/issues/4)
+        # First, creating a dilated brain mask
         maskfilter -npass 2 "${dwi_meanbzero_brain_mask}" dilate "${dwi_mask_dilated}" ${threading} -info 2>&1 | tee -a "${log_file}"
 
-        # Now, perfoming CSD with the dilated mask
-        dwi2fod msmt_csd "${dwi_mif}" -mask "${dwi_mask_dilated}" "${wm_txt}" "${wm_fod}" \
-                "${gm_txt}" "${gm_fod}" "${csf_txt}" "${csf_fod}" ${threading} -info 2>&1 | tee -a "${log_file}"
+        # Now, performing single-shell CSD with the dilated mask
+        dwi2fod csd "${dwi_mif}" "${wm_txt}" "${wm_fod}" -mask "${dwi_mask_dilated}" ${threading} -info 2>&1 | tee -a "${log_file}"
     fi
 
-    # mtnormalise to perform multi-tissue log-domain intensity normalisation (~5sec)
+    # For single-shell, simply copy the FOD as normalized version (no mtnormalise needed)
     wm_fod_norm="${dmri_dir}/wmfod_norm.mif"
-    gm_fod_norm="${dmri_dir}/gmfod_norm.mif"
-    csf_fod_norm="${dmri_dir}/csffod_norm.mif"
-    if [ ! -f ${wm_fod_norm} ] || [ ! -f ${gm_fod_norm} ] || [ ! -f ${csf_fod_norm} ]; then
-        echo -e "${GREEN}[INFO]${NC} `date`: Running multi-tissue log-domain intensity normalisation" | tee -a "${log_file}"
-        
-        # First, creating an eroded brain mask (https://github.com/sina-mansour/UKB-connectomics/issues/5)
-        maskfilter -npass 2 "${dwi_meanbzero_brain_mask}" erode "${dmri_dir}/dwi_meanbzero_brain_mask_eroded_2.nii.gz" ${threading} -info 2>&1 | tee -a "${log_file}"
-
-        # Now, perfoming mtnormalise
-        mtnormalise "${wm_fod}" "${wm_fod_norm}" "${gm_fod}" "${gm_fod_norm}" "${csf_fod}" \
-                    "${csf_fod_norm}" -mask "${dmri_dir}/dwi_meanbzero_brain_mask_eroded_2.nii.gz" ${threading} -info 2>&1 | tee -a "${log_file}"
+    if [ ! -f ${wm_fod_norm} ]; then
+        echo -e "${GREEN}[INFO]${NC} `date`: Copying FOD (single-shell does not require mtnormalise)" | tee -a "${log_file}"
+        cp "${wm_fod}" "${wm_fod_norm}"
     fi
 
-    # create a combined fod image for visualization
+    # create a visualization file from WM FOD for single-shell
     vf_mif="${dmri_dir}/vf.mif"
     if [ ! -f ${vf_mif} ]; then
-        echo -e "${GREEN}[INFO]${NC} `date`: Generating a visualization file from normalized FODs" | tee -a "${log_file}"
-        mrconvert ${threading} -info -coord 3 0 "${wm_fod_norm}" - | mrcat "${csf_fod_norm}" "${gm_fod_norm}" - "${vf_mif}" 2>&1 | tee -a "${log_file}"
+        echo -e "${GREEN}[INFO]${NC} `date`: Generating a visualization file from WM FOD" | tee -a "${log_file}"
+        mrconvert ${threading} -info -coord 3 0 "${wm_fod_norm}" "${vf_mif}" 2>&1 | tee -a "${log_file}"
     fi
 
     #################################################################
@@ -308,10 +295,19 @@ process_subject() {
     fi
 
     parcellation_nii="${anat_dir}/aparc+aseg.nii.gz"
+    parcellation_original="${anat_dir}/aparc+aseg_original.mif"
     parcellation="${anat_dir}/aparc+aseg.mif"
+    
+    # Convert original FastSurfer parcellation
+    if [ ! -f ${parcellation_original} ]; then
+        echo -e "${GREEN}[INFO]${NC} `date`: Converting original parcellation image to mif" | tee -a "${log_file}"
+        mrconvert "${parcellation_nii}" "${parcellation_original}" 2>&1 | tee -a "${log_file}"
+    fi
+    
+    # Resample parcellation to match T1w space (FastSurfer outputs 256^3, but TractoInferno T1 may be different)
     if [ ! -f ${parcellation} ]; then
-        echo -e "${GREEN}[INFO]${NC} `date`: Converting parcellation image to mif" | tee -a "${log_file}"
-        mrconvert "${parcellation_nii}" "${parcellation}" 2>&1 | tee -a "${log_file}"
+        echo -e "${GREEN}[INFO]${NC} `date`: Resampling parcellation to T1w space" | tee -a "${log_file}"
+        mrtransform "${parcellation_original}" "${parcellation}" -template "${T1_nii}" -interp nearest ${threading} -info 2>&1 | tee -a "${log_file}"
     fi
 
     seg_5tt_T1="${dmri_dir}/seg_5tt_T1.mif"

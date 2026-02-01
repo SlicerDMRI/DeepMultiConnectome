@@ -34,7 +34,7 @@ def visualize_subject_connectomes(subject_id, base_path, output_dir, no_diagonal
     
     # Map visual title to file type key (matching compute_connectome_similarities.py)
     weightings_map = {
-        'nos': {'title': 'Number of streamlines', 'log_scale': True},
+        'nos': {'title': 'NoS', 'log_scale': True},
         'fa': {'title': 'mean FA', 'log_scale': False},
         'sift2': {'title': 'SIFT2', 'log_scale': True}
     }
@@ -178,7 +178,9 @@ def visualize_subject_connectomes(subject_id, base_path, output_dir, no_diagonal
             cax_t = divider_t.append_axes("right", size="5%", pad=0.1)
             cb_t = fig.colorbar(im_t, cax=cax_t)
             cb_t.ax.tick_params(labelsize=14)
-            cb_t.set_label(metric_label, fontsize=18)
+            # Use "NoS" for number of streamlines
+            legend_label = "NoS" if ctype == 'nos' else metric_label
+            cb_t.set_label(legend_label, fontsize=18)
 
             # Plot 2: Predicted
             ax_p = axes[row_idx, 1]
@@ -192,7 +194,9 @@ def visualize_subject_connectomes(subject_id, base_path, output_dir, no_diagonal
             cax_p = divider_p.append_axes("right", size="5%", pad=0.1)
             cb_p = fig.colorbar(im_p, cax=cax_p)
             cb_p.ax.tick_params(labelsize=14)
-            cb_p.set_label(metric_label, fontsize=18)
+            # Use "NoS" for number of streamlines
+            legend_label = "NoS" if ctype == 'nos' else metric_label
+            cb_p.set_label(legend_label, fontsize=18)
 
             # Plot 3: Difference
             ax_d = axes[row_idx, 2]
@@ -205,7 +209,9 @@ def visualize_subject_connectomes(subject_id, base_path, output_dir, no_diagonal
             divider_d = make_axes_locatable(ax_d)
             cax_d = divider_d.append_axes("right", size="5%", pad=0.1)
             cb_d = fig.colorbar(im_d, cax=cax_d)
-            diff_label = f"Difference in {metric_label}"
+            # Use "NoS" for number of streamlines
+            legend_label = "NoS" if ctype == 'nos' else metric_label
+            diff_label = f"Difference in {legend_label}"
             cb_d.set_label(diff_label, fontsize=18)
             cb_d.ax.tick_params(labelsize=14)
 
