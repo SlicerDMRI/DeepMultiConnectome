@@ -57,10 +57,10 @@ except ImportError:
     def tqdm(iterable, **kwargs): 
         return iterable
 
-# Add path for imports
+# Add path for imports - use relative paths for portability
 current_dir = Path(__file__).parent
 sys.path.insert(0, str(current_dir.parent))
-sys.path.insert(0, str(Path("/media/volume/HCP_diffusion_MV/DeepMultiConnectome")))
+sys.path.insert(0, str(current_dir.parent.parent))
 
 # Import shared analysis metrics
 from analysis.utils.analysis_metrics import (
@@ -111,8 +111,9 @@ class TRTSimilarityAnalysis:
     
     def __init__(self, 
                  subject_list_file: str,
-                 test_base_path: str = "/media/volume/MV_HCP/HCP_MRtrix_test",
-                 retest_base_path: str = "/media/volume/MV_HCP/HCP_MRtrix_retest",
+                 test_base_path: str = None,
+                 retest_base_path: str = None,
+                 out_path: str = None,
                  max_subjects: int = None,
                  no_diagonal: bool = False,
                  atlases: List[str] = None,
@@ -122,25 +123,34 @@ class TRTSimilarityAnalysis:
         
         Args:
             subject_list_file: Path to file with subject IDs (one per line)
-            test_base_path: Base path to test data
-            retest_base_path: Base path to retest data
+            test_base_path: Base path to test data (default: HCP_TEST_PATH env var or ./data/test)
+            retest_base_path: Base path to retest data (default: HCP_RETEST_PATH env var or ./data/retest)
+            out_path: Output path (default: HCP_OUT_PATH env var or ./output)
             max_subjects: Maximum number of subjects to process (None for all)
             no_diagonal: If True, exclude diagonal from calculations
             atlases: List of atlases to process
             connectome_types: List of connectome types to process
         """
+        # Use environment variables with fallbacks
+        if test_base_path is None:
+            test_base_path = os.environ.get('HCP_TEST_PATH', './data/test')
+        if retest_base_path is None:
+            retest_base_path = os.environ.get('HCP_RETEST_PATH', './data/retest')
+        if out_path is None:
+            out_path = os.environ.get('HCP_OUT_PATH', './output')
+        
         self.subject_list_file = Path(subject_list_file)
         self.test_base = Path(test_base_path)
         self.retest_base = Path(retest_base_path)
         self.max_subjects = max_subjects
         self.no_diagonal = no_diagonal
         
-        # Setup output directories
+        # Setup output directories using configurable out_path
         results_dir_name = "trt_results"
         if self.no_diagonal:
             results_dir_name += "_nodiagonal"
             
-        self.results_dir = Path("/media/volume/HCP_diffusion_MV/DeepMultiConnectome/analysis") / results_dir_name
+        self.results_dir = Path(out_path) / results_dir_name
         self.cache_dir = self.results_dir / "cache"
         self.plots_dir = self.results_dir / "plots"
         
@@ -1067,14 +1077,17 @@ class TRTSimilarityAnalysis:
 def main():
     parser = argparse.ArgumentParser(description="Compute Test-Retest Connectome Similarities")
     parser.add_argument('--subjects_file', type=str, 
-                       default="/media/volume/MV_HCP/subjects_tractography_output_TRT.txt",
-                       help="Path to subject list file")
+                       default=os.environ.get('HCP_SUBJECTS_FILE', './subjects_TRT.txt'),
+                       help="Path to subject list file (default: HCP_SUBJECTS_FILE env var or ./subjects_TRT.txt)")
     parser.add_argument('--test_path', type=str,
-                       default="/media/volume/MV_HCP/HCP_MRtrix_test",
-                       help="Path to test data")
+                       default=os.environ.get('HCP_TEST_PATH', './data/test'),
+                       help="Path to test data (default: HCP_TEST_PATH env var or ./data/test)")
     parser.add_argument('--retest_path', type=str,
-                       default="/media/volume/MV_HCP/HCP_MRtrix_retest",
-                       help="Path to retest data")
+                       default=os.environ.get('HCP_RETEST_PATH', './data/retest'),
+                       help="Path to retest data (default: HCP_RETEST_PATH env var or ./data/retest)")
+    parser.add_argument('--out_path', type=str,
+                       default=os.environ.get('HCP_OUT_PATH', './output'),
+                       help="Output path (default: HCP_OUT_PATH env var or ./output)")
     parser.add_argument('--no_diagonal', action='store_true', 
                        help="Exclude diagonal elements from calculation")
     parser.add_argument('--max_subjects', type=int, default=None,
@@ -1098,6 +1111,7 @@ def main():
         subject_list_file=args.subjects_file,
         test_base_path=args.test_path,
         retest_base_path=args.retest_path,
+        out_path=args.out_path,
         max_subjects=args.max_subjects,
         no_diagonal=args.no_diagonal,
         atlases=args.atlases,

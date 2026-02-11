@@ -27,8 +27,7 @@ from typing import Dict, List, Tuple, Optional
 current_dir = Path(__file__).parent
 sys.path.append(str(current_dir.parent))
 
-from utils.unified_connectome import ConnectomeAnalyzer
-from utils.connectome_utils import ConnectomeBuilder
+from utils.connectome import ConnectomeAnalyzer
 from utils.logger import create_logger
 
 class PopulationConnectomeCreator:
@@ -36,18 +35,29 @@ class PopulationConnectomeCreator:
     Creates population average connectomes from training set subjects.
     """
     
-    def __init__(self, base_path: str = "/media/volume/MV_HCP", 
-                 out_path: str = '/media/volume/HCP_diffusion_MV/DeepMultiConnectome/analysis',
+    def __init__(self, base_path: str = None, 
+                 out_path: str = None,
                  min_length: float = None):
-        """Initialize the population connectome creator"""
+        """Initialize the population connectome creator
+        
+        Args:
+            base_path: Base data path (default: HCP_DATA_PATH env var or ./data)
+            out_path: Output path (default: HCP_OUT_PATH env var or ./output)
+            min_length: Minimum streamline length filter
+        """
+        if base_path is None:
+            base_path = os.environ.get('HCP_DATA_PATH', './data')
+        if out_path is None:
+            out_path = os.environ.get('HCP_OUT_PATH', './output')
         
         self.base_path = Path(base_path)
+        self.out_path = Path(out_path)
         self.min_length = min_length
         # Subject lists - only need training subjects
         self.train_subjects_file = self.base_path / "subjects_tractography_output_1000_train_200.txt"
         
         # Output directory
-        self.output_dir = Path(out_path) / "population_results"
+        self.output_dir = self.out_path / "population_results"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Atlas configuration
@@ -395,8 +405,8 @@ class PopulationConnectomeCreator:
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Create Population Average Connectomes')
-    parser.add_argument('--base-path', default='/media/volume/MV_HCP', 
-                       help='Base path for data (default: /media/volume/MV_HCP)')
+    parser.add_argument('--base-path', default=os.environ.get('HCP_DATA_PATH', './data'),
+                       help='Base path for data (default: HCP_DATA_PATH env var or ./data)')
     parser.add_argument('--force-recompute', action='store_true',
                        help='Force recomputation of cached results')
     parser.add_argument('--min_length', type=float, default=None,

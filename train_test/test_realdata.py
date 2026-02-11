@@ -4,21 +4,18 @@ import os
 import time
 
 import torch
-import torch.nn.parallel
 
 import sys
 sys.path.append('../')
 
 from utils.logger import create_logger
-from utils.funcs import cluster2tract_label, makepath,  obtain_TractClusterMapping,tractography_parcellation
+from utils.funcs import makepath, tractography_parcellation
 from utils.cli import load_args_in_testing_only
-from utils.unified_connectome import ConnectomeAnalyzer, analyze_connectomes_from_labels
+from utils.connectome import ConnectomeAnalyzer, analyze_connectomes_from_labels
 from train import load_model, train_val_test_forward
-from datasets.dataset import RealData_PatchData, center_tractography
+from datasets.dataset import RealData_PatchData
 import utils.tract_feat as tract_feat
-from tractography.label_encoder import * 
-# from utils.metrics_connectome import *  # Replaced by unified_connectome
-
+from utils.label_encoding import generate_label_dict, convert_labels_list, encode_labels_txt
 
 def test_realdata_DL_net(net):
     """test the network"""

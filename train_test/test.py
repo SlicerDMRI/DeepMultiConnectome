@@ -144,9 +144,6 @@ if __name__ == '__main__':
     results_logging(args, logger, eval_state, label_names[0], labels_lst_0, predicted_lst_0, "aparc+aseg")
     if len(args.atlas)==2:
         results_logging(args, logger, eval_state, label_names[1], labels_lst_1, predicted_lst_1, "aparc.a2009s+aseg")
-
-    args.root = "/media/volume/MV_HCP/TrainData_MRtrix_1000_MNI_100K/"
-    print(args.root)
     # total processing time
     time_end = time.time() 
     total_time_DL = round(time_DL_end-time_DL_start, 2)

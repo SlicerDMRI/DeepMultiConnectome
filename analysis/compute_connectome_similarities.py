@@ -47,7 +47,7 @@ import scipy.stats as stats
 # Add path for imports
 current_dir = Path(__file__).parent
 sys.path.insert(0, str(current_dir.parent))
-sys.path.insert(0, str(Path("/media/volume/HCP_diffusion_MV/DeepMultiConnectome")))
+sys.path.insert(0, str(current_dir.parent.parent))
 
 #from utils.logger import create_logger
 import matplotlib
@@ -74,16 +74,35 @@ class ConnectomeSimilarityAnalysis:
    
     def __init__(self, subject_list_file: str, max_subjects: int = None, mask_zeros: bool = False,
                  no_diagonal: bool = False, min_length: float = None,
+                 base_path: str = None, out_path: str = None,
                  atlases: List[str] = None, connectome_types: List[str] = None):
-       
+        """
+        Initialize connectome similarity analysis.
+        
+        Args:
+            subject_list_file: Path to subject list file
+            max_subjects: Max subjects to process (None for all)
+            mask_zeros: Whether to mask zero values
+            no_diagonal: Exclude diagonal from analysis
+            min_length: Minimum streamline length filter
+            base_path: Base data path (default: HCP_DATA_PATH env var or ./data)
+            out_path: Output path (default: HCP_OUT_PATH env var or ./output)
+            atlases: List of atlases to process
+            connectome_types: List of connectome types to process
+        """
+        if base_path is None:
+            base_path = os.environ.get('HCP_DATA_PATH', './data')
+        if out_path is None:
+            out_path = os.environ.get('HCP_OUT_PATH', './output')
+            
         self.subject_list_file = Path(subject_list_file)
         self.max_subjects = max_subjects
         self.mask_zeros = mask_zeros
         self.no_diagonal = no_diagonal
         self.min_length = min_length
-       
-        self.base_path = Path("/media/volume/MV_HCP")
-        self.population_avg_dir = Path("/media/volume/HCP_diffusion_MV/DeepMultiConnectome/analysis/population_results")
+        
+        self.base_path = Path(base_path)
+        self.population_avg_dir = Path(out_path) / "population_results"
         
         # Setup output directories
         results_dir_name = "similarity_results"
@@ -92,23 +111,23 @@ class ConnectomeSimilarityAnalysis:
         if self.min_length:
             results_dir_name += f"_minlen{int(self.min_length)}"
             
-        self.results_dir = Path("/media/volume/HCP_diffusion_MV/DeepMultiConnectome/analysis") / results_dir_name
+        self.results_dir = Path(out_path) / results_dir_name
         self.cache_dir = self.results_dir / "cache"
         self.plots_dir = self.results_dir / "plots"
         
         for d in [self.results_dir, self.cache_dir, self.plots_dir]:
             d.mkdir(parents=True, exist_ok=True)
-           
+        
         # Setup logging
         self.logger = self._setup_logger()
-       
+        
         # Load subjects
         self.subjects = self._load_subject_list()
-       
+        
         # Config
         self.atlases = atlases if atlases else ["aparc+aseg", "aparc.a2009s+aseg"]
         self.connectome_types = connectome_types if connectome_types else ["nos", "fa", "sift2"]
-       
+        
         self.log(f"Initialized analysis for {len(self.subjects)} subjects")
         self.log(f"Atlases: {self.atlases}")
         self.log(f"Connectome types: {self.connectome_types}")
@@ -808,8 +827,15 @@ class ConnectomeSimilarityAnalysis:
 
 def main():
     parser = argparse.ArgumentParser(description="Compute Connectome Similarities (Intra, Inter, Group)")
-    parser.add_argument('--subjects_file', type=str, default="/media/volume/MV_HCP/subjects_tractography_output_1000_test.txt",
-                      help="Path to subject list file")
+    parser.add_argument('--subjects_file', type=str, 
+                       default=os.environ.get('HCP_SUBJECTS_FILE', './subjects.txt'),
+                       help="Path to subject list file (default: HCP_SUBJECTS_FILE env var or ./subjects.txt)")
+    parser.add_argument('--base_path', type=str,
+                       default=os.environ.get('HCP_DATA_PATH', './data'),
+                       help="Base data path (default: HCP_DATA_PATH env var or ./data)")
+    parser.add_argument('--out_path', type=str,
+                       default=os.environ.get('HCP_OUT_PATH', './output'),
+                       help="Output path (default: HCP_OUT_PATH env var or ./output)")
     parser.add_argument('--no_diagonal', action='store_true', help="Exclude diagonal elements from calculation")
     parser.add_argument('--min_length', type=float, default=None, help="Minimum streamline length in mm")
     
@@ -820,12 +846,12 @@ def main():
     
     subjects_file = args.subjects_file
     
-    # Check if file exists, if not try to use a default or fail
+    # Check if file exists, if not try to use a fallback or fail
     if not os.path.exists(subjects_file):
-        # Look for a default in the workspace if arg is just a name
-        possible_path = Path("/media/volume/MV_HCP") / subjects_file
-        if possible_path.exists():
-            subjects_file = str(possible_path)
+        # Look for a file in base_path if only filename was provided
+        fallback_path = Path(args.base_path) / subjects_file
+        if fallback_path.exists():
+            subjects_file = str(fallback_path)
         else:
              print(f"Subject file {subjects_file} not found.")
              # For safety/testing, if arg looks like a subject ID, create a dummy file or list
@@ -837,6 +863,8 @@ def main():
 
     analyzer = ConnectomeSimilarityAnalysis(
         subject_list_file=subjects_file,
+        base_path=args.base_path,
+        out_path=args.out_path,
         no_diagonal=args.no_diagonal,
         min_length=args.min_length
     )

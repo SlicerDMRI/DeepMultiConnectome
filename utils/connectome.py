@@ -33,7 +33,7 @@ from numpy.linalg import norm
 import networkx as nx
 
 # Local imports
-from tractography.label_encoder import convert_labels_list
+from utils.label_encoding import convert_labels_list
 from utils.connectome_config import ATLAS_CONFIG, DIFFUSION_METRICS, CONNECTOME_TYPES
 
 
@@ -1098,3 +1098,326 @@ def analyze_connectomes_from_labels(pred_labels_file: str,
     analyzer.print_summary()
     
     return analyzer
+
+
+# ============================================================================
+# BACKWARD COMPATIBILITY WRAPPER
+# ============================================================================
+# For migration from old metrics_connectome.py
+
+class ConnectomeMetrics:
+    """
+    Backward compatibility wrapper around ConnectomeAnalyzer
+    
+    This class provides the same API as the old metrics_connectome.ConnectomeMetrics
+    for seamless migration. It wraps ConnectomeAnalyzer internally.
+    """
+    
+    def __init__(self, true_labels=None, pred_labels=None, encoding='symmetric', 
+                 atlas="aparc+aseg", out_path='output', graph=False, plot=True):
+        """
+        Initialize ConnectomeMetrics (backward compatible)
+        
+        Args:
+            true_labels: True streamline labels
+            pred_labels: Predicted streamline labels
+            encoding: Label encoding type ('symmetric' or 'asymmetric')
+            atlas: Atlas name (aparc+aseg or aparc.a2009s+aseg)
+            out_path: Output directory
+            graph: Whether to compute network metrics
+            plot: Whether to generate plots
+        """
+        self.true_labels = true_labels
+        self.pred_labels = pred_labels
+        self.atlas = atlas
+        self.encoding = encoding
+        self.out_path = out_path
+        self.results = {}
+        
+        # Initialize the unified analyzer
+        self.analyzer = ConnectomeAnalyzer(atlas=atlas, out_path=out_path)
+        
+        # Decode labels
+        self.true_labels_decoded = convert_labels_list(
+            true_labels, 
+            encoding_type=encoding, 
+            mode='decode', 
+            num_labels=self.analyzer.num_labels
+        )
+        self.pred_labels_decoded = convert_labels_list(
+            pred_labels, 
+            encoding_type=encoding, 
+            mode='decode', 
+            num_labels=self.analyzer.num_labels
+        )
+        
+        # Create connectome matrices
+        self.true_connectome = self._create_connectome_matrix(self.true_labels_decoded)
+        self.pred_connectome = self._create_connectome_matrix(self.pred_labels_decoded)
+        
+        # Save connectomes
+        self._save_connectome(self.true_connectome, f'{atlas}_true')
+        self._save_connectome(self.pred_connectome, f'{atlas}_pred')
+        
+        # Generate plots if requested
+        if plot:
+            self._plot_connectomes()
+            self._plot_difference()
+            self._plot_percentile_change()
+            self._plot_accuracy()
+        
+        # Compute metrics
+        self.compute_metrics()
+        
+        # Compute network metrics if requested
+        if graph:
+            self._compute_network_metrics('true')
+            self._compute_network_metrics('pred')
+        
+        # Save metrics to CSV
+        results_df = pd.DataFrame([self.results])
+        results_path = os.path.join(self.out_path, f"metrics_{atlas}.csv")
+        results_df.to_csv(results_path, index=False)
+        print(f"Metrics saved to {results_path}")
+    
+    def _create_connectome_matrix(self, labels):
+        """Create connectome matrix from labels"""
+        connectome_matrix = np.zeros((self.analyzer.num_labels, self.analyzer.num_labels))
+        
+        if isinstance(labels, dict):
+            # Dict with tuples (nodes) as keys
+            for key, value in labels.items():
+                x, y = key[0], key[1]
+                connectome_matrix[x, y] = value
+                if x != y:
+                    connectome_matrix[y, x] = value
+        else:
+            # List of label pairs
+            for i in range(len(labels) - 1):
+                x, y = labels[i][0], labels[i][1]
+                connectome_matrix[x, y] += 1
+                if x != y:
+                    connectome_matrix[y, x] += 1
+        
+        # Exclude label 0 (background)
+        return connectome_matrix[1:, 1:]
+    
+    def _save_connectome(self, connectome_matrix, title):
+        """Save connectome to CSV"""
+        os.makedirs(self.out_path, exist_ok=True)
+        csv_path = os.path.join(self.out_path, f"connectome_{title}.csv")
+        np.savetxt(csv_path, connectome_matrix, delimiter=',')
+    
+    def _plot_connectome(self, matrix, output_file, title, difference=False, log_scale=True):
+        """Plot connectome matrix"""
+        fig, ax = plt.subplots(figsize=(12, 10))
+        
+        if difference:
+            if not log_scale:
+                cmap = plt.get_cmap('RdBu_r')
+                norm = mcolors.TwoSlopeNorm(vmin=matrix.min(), vcenter=0, vmax=matrix.max())
+            else:
+                cmap = plt.get_cmap('Reds')
+                matrix_plot = np.where(matrix == 0, 1e-6, np.abs(matrix))
+                norm = mcolors.LogNorm(vmin=matrix_plot[matrix_plot > 0].min(), vmax=matrix_plot.max())
+        elif difference == 'percent':
+            cmap = plt.get_cmap('RdBu_r')
+            norm = Normalize(vmin=-1, vmax=1)
+        elif difference == 'accuracy':
+            cmap = plt.get_cmap('RdYlGn')
+            norm = Normalize(vmin=0, vmax=1)
+        else:
+            cmap = plt.get_cmap('YlOrRd')
+            if log_scale:
+                matrix_plot = np.where(matrix == 0, 1e-6, matrix)
+                norm = LogNorm(vmin=matrix_plot[matrix_plot > 0].min(), vmax=matrix_plot.max())
+            else:
+                norm = Normalize(vmin=matrix.min(), vmax=matrix.max())
+        
+        sns.heatmap(matrix, cmap=cmap, norm=norm, ax=ax, cbar_kws={'label': 'Value'})
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.set_xlabel('Node', fontsize=12)
+        ax.set_ylabel('Node', fontsize=12)
+        
+        num_nodes = matrix.shape[0]
+        ax.set_xticks(np.arange(9, num_nodes, 10))
+        ax.set_xticklabels(np.arange(10, num_nodes, 10))
+        ax.set_yticks(np.arange(9, num_nodes, 10))
+        ax.set_yticklabels(np.arange(10, num_nodes, 10))
+        
+        plt.tight_layout()
+        plt.savefig(output_file, dpi=500, bbox_inches='tight')
+        plt.close()
+    
+    def _plot_connectomes(self):
+        """Plot true and predicted connectomes"""
+        self._plot_connectome(self.true_connectome, 
+                             f"{self.out_path}/{self.atlas}_true_logscaled.png",
+                             "True Connectome", log_scale=True)
+        self._plot_connectome(self.pred_connectome,
+                             f"{self.out_path}/{self.atlas}_pred_logscaled.png",
+                             "Predicted Connectome", log_scale=True)
+    
+    def _plot_difference(self):
+        """Plot difference between connectomes"""
+        diff = self.true_connectome - self.pred_connectome
+        self._save_connectome(diff, f'{self.atlas}_diff')
+        self._plot_connectome(diff,
+                             f"{self.out_path}/{self.atlas}_diff.png",
+                             "Difference (True - Predicted)",
+                             difference=True, log_scale=False)
+        self._plot_connectome(np.abs(diff),
+                             f"{self.out_path}/{self.atlas}_diff_abs.png",
+                             "Absolute Difference |True - Predicted|",
+                             difference=True, log_scale=True)
+    
+    def _plot_percentile_change(self):
+        """Plot percentile change"""
+        np.seterr(divide='ignore', invalid='ignore')
+        perc_change = (self.true_connectome - self.pred_connectome) / self.true_connectome
+        perc_change = np.nan_to_num(perc_change, nan=0.0, posinf=0.0, neginf=0.0)
+        self._save_connectome(perc_change, f'{self.atlas}_perc')
+        self._plot_connectome(perc_change,
+                             f"{self.out_path}/{self.atlas}_perc.png",
+                             "Percent Change ((True - Predicted)/True)",
+                             difference='percent', log_scale=False)
+    
+    def _plot_accuracy(self):
+        """Plot accuracy per label"""
+        accuracy_dict = self._label_wise_accuracy(self.true_labels_decoded, self.pred_labels_decoded)
+        acc_matrix = self._create_connectome_matrix(accuracy_dict)
+        self._save_connectome(acc_matrix, f'{self.atlas}_acc')
+        self._plot_connectome(acc_matrix,
+                             f"{self.out_path}/{self.atlas}_acc.png",
+                             "Label-wise Accuracy",
+                             difference='accuracy', log_scale=False)
+    
+    def _label_wise_accuracy(self, true_labels, pred_labels):
+        """Compute per-label accuracy"""
+        unique_labels = set(true_labels) | set(pred_labels)
+        correct = {label: 0 for label in unique_labels}
+        total = {label: 0 for label in unique_labels}
+        
+        for true, pred in zip(true_labels, pred_labels):
+            total[true] += 1
+            if true == pred:
+                correct[true] += 1
+        
+        return {label: correct[label] / total[label] if total[label] > 0 else 1.0 
+                for label in unique_labels}
+    
+    def compute_metrics(self):
+        """Compute classification and connectome metrics"""
+        acc = accuracy_score(self.true_labels, self.pred_labels)
+        mac_prec, mac_rec, mac_f1, _ = precision_recall_fscore_support(
+            self.true_labels, self.pred_labels, average='macro', zero_division=np.nan)
+        wtd_prec, wtd_rec, wtd_f1, _ = precision_recall_fscore_support(
+            self.true_labels, self.pred_labels, average='weighted', zero_division=np.nan)
+        
+        # Connectome metrics
+        pearson, _ = pearsonr(self.true_connectome.flatten(), self.pred_connectome.flatten())
+        spearman, _ = spearmanr(self.true_connectome.flatten(), self.pred_connectome.flatten())
+        mse = mean_squared_error(self.true_connectome, self.pred_connectome)
+        mae = np.sum(np.abs(self.true_connectome - self.pred_connectome))
+        mape = mae / np.sum(self.true_connectome) if np.sum(self.true_connectome) > 0 else 0.0
+        frobenius = norm(self.true_connectome - self.pred_connectome, 'fro')
+        emd = wasserstein_distance(self.true_connectome.flatten(), self.pred_connectome.flatten())
+        
+        # Metrics without unknown label (0)
+        mask = ~np.isin(self.true_labels, [0])
+        filtered_true = np.array(self.true_labels)[mask]
+        filtered_pred = np.array(self.pred_labels)[mask]
+        
+        f_acc = accuracy_score(filtered_true, filtered_pred) if len(filtered_true) > 0 else np.nan
+        f_prec, f_rec, f_f1, _ = precision_recall_fscore_support(
+            filtered_true, filtered_pred, average='macro', zero_division=np.nan)
+        f_wtd_prec, f_wtd_rec, f_wtd_f1, _ = precision_recall_fscore_support(
+            filtered_true, filtered_pred, average='weighted', zero_division=np.nan)
+        
+        self.results = {
+            'Accuracy': acc,
+            'F1-Score (macro)': mac_f1,
+            'Precision (macro)': mac_prec,
+            'Recall (macro)': mac_rec,
+            'F1-Score (weighted)': wtd_f1,
+            'Precision (weighted)': wtd_prec,
+            'Recall (weighted)': wtd_rec,
+            'Accuracy without unknown': f_acc,
+            'F1-Score (macro) without unknown': f_f1,
+            'Precision (macro) without unknown': f_prec,
+            'Recall (macro) without unknown': f_rec,
+            'F1-Score (weighted) without unknown': f_wtd_f1,
+            'Precision (weighted) without unknown': f_wtd_prec,
+            'Recall (weighted) without unknown': f_wtd_rec,
+            'MSE': mse,
+            'MAE': mae,
+            'MAPE': mape,
+            'Pearson Correlation': pearson,
+            'Spearman Correlation': spearman,
+            'Frobenius Norm': frobenius,
+            'Earth Mover\'s Distance': emd
+        }
+    
+    def _compute_network_metrics(self, version):
+        """Compute network metrics for given connectome version"""
+        if version == 'true':
+            matrix = self.true_connectome
+        else:
+            matrix = self.pred_connectome
+        
+        # Create graph
+        G = nx.from_numpy_array(matrix)
+        
+        # Transform weights for path-based metrics
+        with np.errstate(divide='ignore'):
+            reciprocal = 1.0 / matrix
+        reciprocal[np.isinf(reciprocal)] = 0
+        G_recip = nx.from_numpy_array(reciprocal)
+        
+        # Compute metrics
+        try:
+            metrics = {
+                f'Global Efficiency {version}': nx.global_efficiency(G_recip),
+                f'Local Efficiency {version}': nx.local_efficiency(G_recip),
+                f'Assortativity {version}': nx.degree_assortativity_coefficient(G, weight='weight'),
+                f'Modularity {version}': nx.algorithms.community.modularity(
+                    G, nx.algorithms.community.greedy_modularity_communities(G, weight='weight')),
+                f'Clustering Coefficient {version}': nx.average_clustering(G, weight='weight'),
+                f'Path Length {version}': nx.average_shortest_path_length(G_recip, weight='weight'),
+                f'Network Density {version}': nx.density(G),
+            }
+            self.results.update(metrics)
+        except Exception as e:
+            print(f"Warning: Could not compute network metrics: {e}")
+    
+    def format_metrics(self):
+        """Return formatted metrics string (compatible with old interface)"""
+        return """
+    Metrics Summary:
+    ----------------
+    Metrics including all labels
+    Accuracy: {Accuracy:.4f}
+    F1-Score (Macro): {F1-Score (macro):.4f}
+    Precision (Macro): {Precision (macro):.4f}
+    Recall (Macro): {Recall (macro):.4f}
+    F1-Score (Weighted): {F1-Score (weighted):.4f}
+    Precision (Weighted): {Precision (weighted):.4f}
+    Recall (Weighted): {Recall (weighted):.4f}
+    
+    Metrics ignoring the unknown (and potentially thresholded) labels
+    Accuracy: {Accuracy without unknown:.4f}
+    F1-Score (Macro): {F1-Score (macro) without unknown:.4f}
+    Precision (Macro): {Precision (macro) without unknown:.4f}
+    Recall (Macro): {Recall (macro) without unknown:.4f}
+    F1-Score (Weighted): {F1-Score (weighted) without unknown:.4f}
+    Precision (Weighted): {Precision (weighted) without unknown:.4f}
+    Recall (Weighted): {Recall (weighted) without unknown:.4f}
+    
+    MSE: {MSE:.4f}
+    MAE: {MAE:.4f}
+    MAPE: {MAPE:.4f}
+    Pearson Correlation: {Pearson Correlation:.4f}
+    Spearman Correlation: {Spearman Correlation:.4f}
+    Frobenius Norm: {Frobenius Norm:.4f}
+    Earth Mover's Distance: {Earth Mover's Distance:.4f}
+    """.format(**self.results)

@@ -20,12 +20,11 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-# Add path for imports
+# Add path for imports - use relative paths for portability
 current_dir = Path(__file__).parent
 sys.path.append(str(current_dir.parent))
-sys.path.append(str(Path("/media/volume/HCP_diffusion_MV/DeepMultiConnectome")))
+sys.path.append(str(current_dir.parent.parent))
 
-from utils.connectome_utils import ConnectomeBuilder
 from utils.logger import create_logger
 
 def load_labels_file(labels_file):
@@ -60,9 +59,10 @@ def fast_load_txt(filepath):
         # Fallback (slow), ensure comment handling
         return pd.read_csv(filepath, header=None, sep=r'\s+', comment='#').values.flatten()
 
-def filter_and_rebuild_connectomes(subject_id, min_length_mm, atlas_name, base_path="/media/volume/MV_HCP"):
-    
-    base_path = Path(base_path)
+def filter_and_rebuild_connectomes(subject_id, min_length_mm, atlas_name, base_path=None):
+    """Filter streamlines by length and rebuild connectomes"""
+    if base_path is None:
+        base_path = os.environ.get('HCP_DATA_PATH', './data')
     # Correct paths based on context
     # /media/volume/MV_HCP/HCP_MRtrix/100206/output/streamline_lengths_10M.txt
     # /media/volume/MV_HCP/HCP_MRtrix/100206/output/labels_10M_aparc+aseg.txt
@@ -80,8 +80,6 @@ def filter_and_rebuild_connectomes(subject_id, min_length_mm, atlas_name, base_p
     
     # Also need diffusion metrics for weighted connectomes (if they exist)
     # Typically in dMRI folder or output folder
-    # Based on streamline_length_thresholding.py context:
-    # self.fa_file = self.subject_path / "dMRI" / "mean_fa_per_streamline.txt"
     dmri_dir = subject_dir / "dMRI"
     fa_file = dmri_dir / "mean_fa_per_streamline.txt"
     sift_file = dmri_dir / "sift2_weights.txt" 
