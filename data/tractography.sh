@@ -3,22 +3,17 @@
 # TRACTOGRAPHY PROCESSING SCRIPT
 #==============================================================================
 # 
+# If you downloaded HCP zip files, consider restructuring first using
+# data/HCP_restructure_subjects.sh to match the expected directory layout.
+#
 # This script performs complete diffusion MRI tractography processing pipeline
-# including:
-# - Diffusion image preprocessing and conversion
-# - Constrained Spherical Deconvolution (CSD)
-# - Diffusion Tensor Imaging (DTI) metrics calculation
-# - Tissue boundary creation using 5TT segmentation
-# - Probabilistic tractography generation
-# - Structural connectivity matrix computation
-# - Diffusion metric-weighted connectomes (FA, MD, AD, RD)
 #
 # USAGE:
 #   bash tractography.sh <SUBJECT_ID_OR_FILE> <DATA_DIR> [NUM_JOBS] [THREADS_PER_JOB]
 #
 # PARAMETERS:
 #   SUBJECT_ID_OR_FILE - Either:
-#                        - A specific 6-digit subject ID (e.g., "100206")
+#                        - A specific subject ID (e.g., "100206")
 #                        - "all" to process all subjects in the data directory
 #                        - Path to a text file containing subject IDs (one per line)
 #   DATA_DIR           - Absolute path to the directory containing subject folders

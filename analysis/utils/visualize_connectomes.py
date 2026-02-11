@@ -248,7 +248,8 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('subject_id')
-    parser.add_argument('--base-dir', default='/media/volume/MV_HCP')
+    parser.add_argument('--base-dir', default=os.environ.get('HCP_DATA_PATH', './data'),
+                       help='Base data directory (default: HCP_DATA_PATH env var or ./data)')
     parser.add_argument('--out-dir', default='.')
     args = parser.parse_args()
     

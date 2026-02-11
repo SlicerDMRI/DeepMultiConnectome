@@ -1,4 +1,4 @@
-# Custom
+# Custom - Data and results
 *.idea
 *.pdf
 *.tar.gz
@@ -17,8 +17,7 @@ plots/
 /analysis/ShapeAnalysisTractography-main
 /analysis/CPM
 analysis/data/subjects_tractography_output_1000_test.txt
-analysis/test_retest/data/blant_plot.png
-
+analysis/test_retest/
 
 # Byte-compiled / optimized / DLL files
 */__pycache__
@@ -109,5 +108,3 @@ ENV/
 
 # Rope project settings
 .ropeproject
-analysis/population_results
-analysis/interintra_similarity_results_log

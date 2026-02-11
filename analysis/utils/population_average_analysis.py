@@ -41,8 +41,7 @@ from sklearn.metrics import mean_squared_error
 current_dir = Path(__file__).parent
 sys.path.append(str(current_dir.parent))
 
-from utils.unified_connectome import ConnectomeAnalyzer
-from utils.connectome_utils import ConnectomeBuilder
+from utils.connectome import ConnectomeAnalyzer
 from utils.logger import create_logger
 
 # Import shared analysis metrics
@@ -59,17 +58,29 @@ class PopulationConnectomeAnalysis:
     Population-level connectome analysis combining training set averages with test set validation
     """
     
-    def __init__(self, base_path: str = "/media/volume/MV_HCP", out_path: str = '/media/volume/HCP_diffusion_MV/DeepMultiConnectome/analysis'):
-        """Initialize the population analysis"""
+    def __init__(self, base_path: str = None, out_path: str = None):
+        """
+        Initialize the population analysis
+        
+        Args:
+            base_path: Path to HCP data (defaults to HCP_DATA_PATH env var or './data')
+            out_path: Output path (defaults to HCP_OUT_PATH env var or './output')
+        """
+        # Use environment variables with fallbacks
+        if base_path is None:
+            base_path = os.environ.get('HCP_DATA_PATH', './data')
+        if out_path is None:
+            out_path = os.environ.get('HCP_OUT_PATH', './output')
         
         self.base_path = Path(base_path)
+        self.out_path = Path(out_path)
 
         # Subject lists
         self.train_subjects_file = self.base_path / "subjects_tractography_output_1000_train_200.txt"
         self.test_subjects_file = self.base_path / "subjects_tractography_output_1000_test.txt"
         
         # Output directory
-        self.output_dir = Path(out_path) / "population_results"
+        self.output_dir = self.out_path / "population_results"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Atlas configuration
@@ -1209,8 +1220,10 @@ class PopulationConnectomeAnalysis:
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Population Connectome Analysis')
-    parser.add_argument('--base-path', default='/media/volume/MV_HCP', 
-                       help='Base path for data (default: /media/volume/MV_HCP)')
+    parser.add_argument('--base-path', default=os.environ.get('HCP_DATA_PATH', './data'),
+                       help='Base path for data (default: HCP_DATA_PATH env var or ./data)')
+    parser.add_argument('--out-path', default=os.environ.get('HCP_OUT_PATH', './output'),
+                       help='Output path (default: HCP_OUT_PATH env var or ./output)')
     parser.add_argument('--compute-average', action='store_true',
                        help='Compute population average connectomes only')
     parser.add_argument('--test-comparison', action='store_true',
@@ -1227,7 +1240,7 @@ def main():
         args.full_analysis = True
     
     # Initialize analysis
-    analysis = PopulationConnectomeAnalysis(base_path=args.base_path)
+    analysis = PopulationConnectomeAnalysis(base_path=args.base_path, out_path=args.out_path)
     
     try:
         if args.full_analysis:
