@@ -11,7 +11,6 @@ import whitematteranalysis as wma
 from pytorch3d.transforms import RotateAxisAngle, Scale, Translate
 
 sys.path.append('..')
-import utils.tract_feat as tract_feat
 from utils.funcs import obtain_TractClusterMapping, cluster2tract_label, \
     get_rot_axi, array2vtkPolyData, makepath
 from utils.fiber_distance import MDF_distance_calculation, MDF_distance_calculation_endpoints

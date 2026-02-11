@@ -19,7 +19,7 @@ from models.pointnet import PointNetCls
 from models.dgcnn import tract_DGCNN_cls
 from utils.logger import create_logger
 from utils.metrics_plots import classify_report, process_curves, calculate_acc_prec_recall_f1, best_swap, save_best_weights
-from utils.funcs import round_decimal, unify_path, makepath, fix_seed, obtain_TractClusterMapping, cluster2tract_label, save_info_feat, str2num
+from utils.funcs import unify_path, makepath, fix_seed, save_info_feat, str2num
 from utils.cli import create_parser, save_args, adaptive_args
 from utils.connectome import ConnectomeMetrics
 
