@@ -32,6 +32,10 @@ For running the tractography data preparation, [MRtrix3](https://www.mrtrix.org/
 ### 1. Download Data
 This research used the [HCP Young Adult dataset](https://www.humanconnectome.org/study/hcp-young-adult/). Download the required diffusion MRI data.
 
+The parcellation files `aparc+aseg.nii.gz` and `aparc.a2009s+aseg.nii.gz` exist in two locations in the HCP download (`T1w/` and `MNINonLinear/`). This work used the files from the `MNINonLinear/` folder, but either version can be used.
+
+`FreeSurferColorLUT.txt` is required by the tractography pipeline. Download it from the [FreeSurfer wiki](https://surfer.nmr.mgh.harvard.edu/fswiki/FsTutorial/AnatomicalROI/FreeSurferColorLUT) and set `LUT_FILE` at the top of `data/tractography.sh` to its path.
+
 ### 2. Preprocessing and Tractography
 ```bash
 bash data/tractography.sh
@@ -48,7 +52,7 @@ This script encodes streamline ROI labels, aggregates tractography outputs into 
 
 ### Pre-trained Model
 
-A pre-trained model is included at `/media/volume/HCP_diffusion_MV/DeepMultiConnectome/train_test/trained_model`
+A pre-trained model is included at `train_test/trained_model`
 
 
 ### Training

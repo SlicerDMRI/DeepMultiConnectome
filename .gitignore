@@ -18,6 +18,7 @@ plots/
 /analysis/CPM
 analysis/data/subjects_tractography_output_1000_test.txt
 analysis/test_retest/
+data/FreeSurferColorLUT.txt
 
 # Byte-compiled / optimized / DLL files
 */__pycache__
