@@ -106,6 +106,15 @@ if [ -z "$SUBJECT_INPUT" ] || [ -z "$DATA_DIR" ]; then
     exit 1
 fi
 
+# =============================================================================
+# USER-CONFIGURABLE PATHS
+# =============================================================================
+# FreeSurferColorLUT.txt is required by 5ttgen (freesurfer method) and labelconvert.
+# Download from: https://surfer.nmr.mgh.harvard.edu/fswiki/FsTutorial/AnatomicalROI/FreeSurferColorLUT
+# Set this to the absolute path of the file on your system.
+LUT_FILE="/path/to/FreeSurferColorLUT.txt"
+# =============================================================================
+
 # Calculate total cores that will be used
 TOTAL_CORES=$((NUM_JOBS * THREADS_PER_JOB))
 
@@ -317,27 +326,33 @@ process_subject() {
 
     gmwm_seed_T1="${dmri_dir}/gmwm_seed_T1.mif"
     gmwm_seed="${dmri_dir}/gmwm_seed.mif"
-    transform_DWI_T1_FSL="${dmri_dir}/diff2struct_fsl.txt"
-    transform_DWI_T1="${dmri_dir}/diff2struct_mrtrix.txt"
+    transform_T1_to_DWI="${dmri_dir}/struct2diff_mrtrix.txt"
 
     if [ ! -f ${gmwm_seed} ]; then
         echo -e "${GREEN}[INFO]${NC} `date`: Running 5ttgen to get gray matter white matter interface mask" | tee -a "${log_file}"
         # Use FreeSurfer parcellation method with explicit LUT path (FSL not required)
-        LUT_FILE="/media/volume/HCP_diffusion_MV/DeepMultiConnectome/tractography/txt_files/FreeSurferColorLUT.txt"
-        5ttgen freesurfer "${parcellation}" "${seg_5tt_T1}" -nocrop -lut "${LUT_FILE}" ${threading} -info 2>&1 | tee -a "${log_file}"  
+        5ttgen freesurfer "${parcellation}" "${seg_5tt_T1}" -nocrop -lut "${LUT_FILE}" ${threading} -info 2>&1 | tee -a "${log_file}"
 
         # Next generate the boundary ribbon
         5tt2gmwmi ${threading} "${seg_5tt_T1}" "${gmwm_seed_T1}" -info 2>&1 | tee -a "${log_file}"
 
-        # Coregistering the Diffusion and Anatomical Images
-        # Perform rigid body registration using MRtrix mrregister (FSL not required)
-        mrregister "${dwi_meanbzero_brain}" "${T1_brain_nii}" \
-            -type rigid -rigid "${transform_DWI_T1}" ${threading} -info 2>&1 | tee -a "${log_file}"
+        # Coregistering T1 to DWI space using MRtrix mrregister (FSL not required).
+        # T1 is the moving image; DWI mean b0 is fixed. The resulting transform maps T1→DWI.
+        mrregister "${T1_brain}" "${dwi_meanbzero}" \
+            -type rigid \
+            -rigid "${transform_T1_to_DWI}" \
+            -transformed "${dmri_dir}/T1_brain_dwi_from_mrregister.mif" \
+            -mask2 "${dwi_meanbzero_brain_mask}" \
+            -rigid_init_translation geometric \
+            ${threading} -info 2>&1 | tee -a "${log_file}"
 
         # Perform transformation of the boundary ribbon from T1 to DWI space
-        mrtransform "${seg_5tt_T1}" "${seg_5tt}" -linear "${transform_DWI_T1}" -inverse ${threading} -info 2>&1 | tee -a "${log_file}"
-        mrtransform "${T1_brain}" "${T1_brain_dwi}" -linear "${transform_DWI_T1}" -inverse ${threading} -info 2>&1 | tee -a "${log_file}"
-        mrtransform "${gmwm_seed_T1}" "${gmwm_seed}" -linear "${transform_DWI_T1}" -inverse ${threading} -info 2>&1 | tee -a "${log_file}"
+        mrtransform "${seg_5tt_T1}" "${seg_5tt}" -linear "${transform_T1_to_DWI}" \
+            -template "${dwi_meanbzero}" -interp nearest ${threading} -info 2>&1 | tee -a "${log_file}"
+        mrtransform "${T1_brain}" "${T1_brain_dwi}" -linear "${transform_T1_to_DWI}" \
+            -template "${dwi_meanbzero}" -interp linear ${threading} -info 2>&1 | tee -a "${log_file}"
+        mrtransform "${gmwm_seed_T1}" "${gmwm_seed}" -linear "${transform_T1_to_DWI}" \
+            -template "${dwi_meanbzero}" -interp nearest ${threading} -info 2>&1 | tee -a "${log_file}"
         
         # Visualize result
         # mrview T1_brain_dwi.mif -overlay.load gmwm_seed.mif -overlay.colourmap 2 -overlay.load gmwm_seed_T1.mif -overlay.colourmap 1
@@ -402,9 +417,9 @@ process_subject() {
     end_time_tractography=$(date +%s)  # End time
     elapsed_time_tractography=$((end_time_tractography - start_time_tractography))
 
-    #!################################################################# 
-    #!###################### SIFT2 STREAMLINE WEIGHTS #################
-    #!#################################################################
+    ################################################################## 
+    ####################### SIFT2 STREAMLINE WEIGHTS #################
+    ##################################################################
     start_time_sift=$(date +%s)
     sift_weights="${dmri_dir}/sift2_weights.txt"
     if [ ! -f ${sift_weights} ]; then
@@ -471,8 +486,15 @@ process_subject() {
         # Convert Freesurfer labels to MRtrix if not already converted
         if [ ! -f ${parcellation_converted} ]; then
             echo -e "${GREEN}[INFO]${NC} `date`: Converting Freesurfer labels for ${parc} to MRtrix" | tee -a "${log_file}"
-            # labelconvert "${parcellation}" $FREESURFER_HOME/FreeSurferColorLUT.txt $MRTRIX3_HOME/share/mrtrix3/labelconvert/fs_default.txt "${parcellation_converted}" 2>&1 | tee -a "${log_file}"
-            labelconvert "${parcellation}" ./txt_files/FreeSurferColorLUT.txt ./txt_files/fs_${parc}.txt "${parcellation_converted}" 2>&1 | tee -a "${log_file}"
+            # Map parcellation name to the corresponding MRtrix3 built-in label conversion file
+            # (fs_default.txt for Desikan-Killiany aparc+aseg; fs_a2009s.txt for Destrieux aparc.a2009s+aseg)
+            MRTRIX3_LUT_DIR="$(dirname "$(which mrconvert)")/../share/mrtrix3/labelconvert"
+            case "${parc}" in
+                "aparc+aseg")        mrtrix_lut="${MRTRIX3_LUT_DIR}/fs_default.txt" ;;
+                "aparc.a2009s+aseg") mrtrix_lut="${MRTRIX3_LUT_DIR}/fs_a2009s.txt" ;;
+                *)                   mrtrix_lut="${MRTRIX3_LUT_DIR}/fs_default.txt" ;;
+            esac
+            labelconvert "${parcellation}" "${LUT_FILE}" "${mrtrix_lut}" "${parcellation_converted}" 2>&1 | tee -a "${log_file}"
         fi
 
         # Generate connectome matrix if not already generated
@@ -504,7 +526,6 @@ process_subject() {
         connectome_matrix_md_mean="${output_dir}/connectome_matrix_MD_mean_${parc}.csv"
         connectome_matrix_ad_mean="${output_dir}/connectome_matrix_AD_mean_${parc}.csv"
         connectome_matrix_rd_mean="${output_dir}/connectome_matrix_RD_mean_${parc}.csv"
-        #!!!!!!!!!
         connectome_matrix_sift_sum="${output_dir}/connectome_matrix_SIFT_sum_${parc}.csv"
         
         if [ ! -f ${connectome_matrix_fa_mean} ]; then
@@ -549,7 +570,6 @@ process_subject() {
             tck2connectome ${threading} -info -symmetric \
                             "${tracts}" "${parcellation_converted}" "${connectome_matrix_rd_mean}" \
                             -scale_file "${dmri_dir}/mean_rd_per_streamline.txt" -stat_edge mean 2>&1 | tee -a "${log_file}"
-            #!!!!!!!!!!!!!
             echo -e "${GREEN}[INFO]${NC} `date`: Generating SIFT2-weighted connectome" | tee -a "${log_file}"
             tck2connectome ${threading} -info -symmetric \
                            "${tracts}" "${parcellation_converted}" "${connectome_matrix_sift_sum}" \
@@ -568,7 +588,6 @@ process_subject() {
             python plot_connectome.py "${connectome_matrix_ad_mean}" "${output_dir}/connectome_matrix_AD_mean_${streamlines}_${parc}.png" "AD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
             python plot_connectome.py "${connectome_matrix_rd_mean}" "${output_dir}/connectome_matrix_RD_mean_${streamlines}_${parc}.png" "RD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
             python plot_connectome.py "${connectome_matrix_rd_mean}" "${output_dir}/connectome_matrix_RD_mean_${streamlines}_${parc}.png" "RD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
-            #!!!!!!!!!!!
             python plot_connectome.py "${connectome_matrix_sift_sum}" "${output_dir}/connectome_matrix_SIFT_sum_${streamlines}_${parc}.png" "SIFT2-weighted Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
 
         fi
@@ -589,10 +608,6 @@ process_subject() {
     echo -e "${GREEN}[INFO]${NC} `date`: Tractography took: ${elapsed_time_tractography} seconds." | tee -a "${log_file}"
     echo -e "${GREEN}[INFO]${NC} `date`: SIFT2 weighting took: ${elapsed_time_sift} seconds." | tee -a "${log_file}"
     echo -e "${GREEN}[INFO]${NC} `date`: Finished processing ${subject_id}. Total time: ${elapsed_time} seconds." | tee -a "${log_file}"
-
-    # Call the Python script to clean the log file
-    python3 ./clean_log.py "${log_file}"
-    echo "Log file cleaned!"
 
     # Remove intermediate tract files to save space
     for f in "${tracts}" "${tracts_MNI}" "${tracts_vtk}"; do # "${tracts_vtk_MNI}"; do
