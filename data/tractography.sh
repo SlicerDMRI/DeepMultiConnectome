@@ -64,7 +64,7 @@
 #
 # REQUIREMENTS:
 #   - MRtrix3 (with all tools: mrconvert, dwi2response, dwi2fod, etc.)
-#   - FSL (bet, flirt)
+#   - FSL (optional, not required by default pipeline)
 #   - FreeSurfer (for parcellation files)
 #   - Python with matplotlib, numpy, pandas
 #   - GNU parallel (optional, for parallel processing)
@@ -322,7 +322,6 @@ process_subject() {
     seg_5tt="${dmri_dir}/seg_5tt.mif"
 
     T1_brain_dwi="${dmri_dir}/T1_brain_dwi.mif"
-    T1_brain_mask="${anat_dir}/T1_brain_mask.nii.gz"
 
     gmwm_seed_T1="${dmri_dir}/gmwm_seed_T1.mif"
     gmwm_seed="${dmri_dir}/gmwm_seed.mif"
@@ -488,7 +487,7 @@ process_subject() {
             echo -e "${GREEN}[INFO]${NC} `date`: Converting Freesurfer labels for ${parc} to MRtrix" | tee -a "${log_file}"
             # Map parcellation name to the corresponding MRtrix3 built-in label conversion file
             # (fs_default.txt for Desikan-Killiany aparc+aseg; fs_a2009s.txt for Destrieux aparc.a2009s+aseg)
-            MRTRIX3_LUT_DIR="$(dirname "$(which mrconvert)")/../share/mrtrix3/labelconvert"
+            MRTRIX3_LUT_DIR=$(dirname "$(which mrconvert)")/../share/mrtrix3/labelconvert
             case "${parc}" in
                 "aparc+aseg")        mrtrix_lut="${MRTRIX3_LUT_DIR}/fs_default.txt" ;;
                 "aparc.a2009s+aseg") mrtrix_lut="${MRTRIX3_LUT_DIR}/fs_a2009s.txt" ;;
@@ -516,7 +515,7 @@ process_subject() {
             echo -e "${GREEN}[INFO]${NC} `date`: tck2connectome completed for ${parc} in ${elapsed_time} seconds" | tee -a "${log_file}"
 
             # Generate the connectome matrix plot
-            python plot_connectome.py "${connectome_matrix}" "${output_dir}/connectome_matrix_${streamlines}_${parc}.png" "Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
+            python3 plot_connectome.py "${connectome_matrix}" "${output_dir}/connectome_matrix_${streamlines}_${parc}.png" "Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
         fi
 
         
@@ -583,12 +582,11 @@ process_subject() {
             echo -e "${GREEN}[INFO]${NC} `date`: Diffusion-weighted connectome generation completed for ${parc} in ${elapsed_time} seconds" | tee -a "${log_file}"
 
             # Generate the diffusion-weighted connectome matrix plots
-            python plot_connectome.py "${connectome_matrix_fa_mean}" "${output_dir}/connectome_matrix_FA_mean_${streamlines}_${parc}.png" "FA-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
-            python plot_connectome.py "${connectome_matrix_md_mean}" "${output_dir}/connectome_matrix_MD_mean_${streamlines}_${parc}.png" "MD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
-            python plot_connectome.py "${connectome_matrix_ad_mean}" "${output_dir}/connectome_matrix_AD_mean_${streamlines}_${parc}.png" "AD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
-            python plot_connectome.py "${connectome_matrix_rd_mean}" "${output_dir}/connectome_matrix_RD_mean_${streamlines}_${parc}.png" "RD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
-            python plot_connectome.py "${connectome_matrix_rd_mean}" "${output_dir}/connectome_matrix_RD_mean_${streamlines}_${parc}.png" "RD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
-            python plot_connectome.py "${connectome_matrix_sift_sum}" "${output_dir}/connectome_matrix_SIFT_sum_${streamlines}_${parc}.png" "SIFT2-weighted Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
+            python3 plot_connectome.py "${connectome_matrix_fa_mean}" "${output_dir}/connectome_matrix_FA_mean_${streamlines}_${parc}.png" "FA-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
+            python3 plot_connectome.py "${connectome_matrix_md_mean}" "${output_dir}/connectome_matrix_MD_mean_${streamlines}_${parc}.png" "MD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
+            python3 plot_connectome.py "${connectome_matrix_ad_mean}" "${output_dir}/connectome_matrix_AD_mean_${streamlines}_${parc}.png" "AD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
+            python3 plot_connectome.py "${connectome_matrix_rd_mean}" "${output_dir}/connectome_matrix_RD_mean_${streamlines}_${parc}.png" "RD-weighted (mean) Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
+            python3 plot_connectome.py "${connectome_matrix_sift_sum}" "${output_dir}/connectome_matrix_SIFT_sum_${streamlines}_${parc}.png" "SIFT2-weighted Connectome matrix subject ${subject_id} (${parc})" 2>&1 | tee -a "${log_file}"
 
         fi
 
